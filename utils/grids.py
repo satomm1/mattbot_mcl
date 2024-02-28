@@ -66,7 +66,12 @@ class StochOccupancyGrid2D(object):
         p_total = np.prod(1. - np.maximum(prob_window / 100., 0.))
 
         return (1. - p_total) < self.thresh          
-            
+
+    def is_unknown(self, state):
+        x, y = self.snap_to_grid(state)
+        grid_x = int((x - self.origin_x) / self.resolution)
+        grid_y = int((y - self.origin_y) / self.resolution)
+        return self.probs[grid_y, grid_x] == -1
 
     def plot(self, fig_num=0):
         fig = plt.figure(fig_num)
