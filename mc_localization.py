@@ -129,7 +129,7 @@ class MonteCarloLocalization:
         """
         self.map_probs = msg.data
         # if we've received the map metadata and have a way to update it:
-        if (self.map_width > 0 and self.map_height > 0 and len(self.map_probs) > 0):
+        if (self.map_width is not None and self.map_height is not None and len(self.map_probs) > 0):
 
             self.occupancy = StochOccupancyGrid2D(
                 self.map_resolution,
@@ -143,7 +143,9 @@ class MonteCarloLocalization:
 
             if self.have_map is False:
                 self.have_map = True
+                print("Generating Lookup Table...")
                 self.generate_dist_lookup_table()
+                print("Lookup Table Generated")
 
     def generate_dist_lookup_table(self):
         """
@@ -152,8 +154,11 @@ class MonteCarloLocalization:
         self.dist_lookup_table = np.zeros((self.map_width, self.map_height))
         for x in range(self.map_width):
             for y in range(self.map_height):
-                if self.occupancy.is_free((x, y)):
-                    self.dist_lookup_table[x, y] = self.find_closest_obstacle((x, y))
+                print("x,y: ", x, y)
+                if self.occupancy.is_unknown((x*self.map_resolution,y*self.map_resolution)):
+                    self.dist_lookup_table[x,y] = -1
+                elif self.occupancy.is_free((x*self.map_resolution,y*self.map_resolution)):
+                    self.dist_lookup_table[x, y] = self.find_closest_obstacle(x, y)
                 else:
                     self.dist_lookup_table[x, y] = 0
 
@@ -172,7 +177,7 @@ class MonteCarloLocalization:
                     if np.abs(i) == k or np.abs(j) == k:
                         new_x = np.clip(x+i, 0, self.map_width-1)
                         new_y = np.clip(y+j, 0, self.map_height-1)
-                        if ~self.occupancy.is_free((new_x, new_y)):
+                        if ~self.occupancy.is_free((new_x*self.map_resolution, new_y*self.map_resolution)):
                             return np.sqrt(i**2 + j**2)*self.map_resolution
             k += 1
 
