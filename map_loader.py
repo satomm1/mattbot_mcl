@@ -4,12 +4,17 @@ import yaml
 import matplotlib.pyplot as plt
 import numpy as np
 
-class MapLoader:
+class MapPublisher:
     """
     The MapLoader class
 
     Attributes:
-        TODO Add me
+        map_pub: The map publisher
+        map_md_pub: The map metadata publisher
+        map_seq: The sequence number for the map message
+        map_data: The map data (2D occupancy grid data)
+        map_metadata: The map metadata (MapMetaData message)
+        resolution: The resolution of the map (meters per pixel)
 
     Description:
         The MapLoader class is responsible for loading the map from the specified file and publishing it to the /map
@@ -32,6 +37,7 @@ class MapLoader:
         self.map_seq = 0
 
         self.map_data, self.map_metadata = self.load_map(map_file)
+        self.resolution = self.map_metadata.resolution
 
     def load_map(self, map_file):
         """
@@ -102,8 +108,9 @@ class MapLoader:
         map_msg.info = map_metadata
         map_msg.data = map_data
 
-        self.map_pub.publish(map_msg)
         self.map_md_pub.publish(map_metadata)
+        self.map_pub.publish(map_msg)
+
 
     def run(self):
         """
@@ -117,5 +124,5 @@ class MapLoader:
 
 if __name__ == '__main__':
     map_file = 'maps/map.yaml'
-    map_loader = MapLoader(map_file)
+    map_loader = MapPublisher(map_file)
     map_loader.run()
