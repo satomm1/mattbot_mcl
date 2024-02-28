@@ -87,11 +87,12 @@ class MonteCarloLocalization:
         Args:
             msg: OccupancyGrid message
         """
-        self.have_map = True
-
+        print("MAP")
+        
         self.map_probs = msg.data
         # if we've received the map metadata and have a way to update it:
         if (self.map_width > 0 and self.map_height > 0 and len(self.map_probs) > 0):
+            self.have_map = True
             self.occupancy = StochOccupancyGrid2D(
                 self.map_resolution,
                 self.map_width,
@@ -109,6 +110,7 @@ class MonteCarloLocalization:
         Args:
             msg: Odometry message
         """
+        print("ODOM")
         self.mutex.acquire()
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
@@ -126,6 +128,7 @@ class MonteCarloLocalization:
         Args:
             msg: LaserScan message
         """
+        print("SCAN")
         self.mutex.acquire()
 
         self.mutex.release()
