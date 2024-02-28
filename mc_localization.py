@@ -76,7 +76,7 @@ class MonteCarloLocalization:
         self.map_width = msg.width
         self.map_height = msg.height
         self.map_resolution = msg.resolution
-        self.map_origin = msg.origin
+        self.map_origin = (msg.origin.position.x, msg.origin.position.y)
 
     def map_callback(self, msg):
         """
@@ -248,9 +248,9 @@ class MonteCarloLocalization:
 
 
     def shutdown(self):
-    '''
-    Shutdown function
-    '''
+        """
+        Shutdown function
+        """
         rospy.loginfo("Shutting down monte_carlo_localization node...")
         rospy.sleep(1)
 
