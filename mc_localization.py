@@ -94,7 +94,7 @@ class MonteCarloLocalization:
         self.map_origin = None
 
         # This table will be the lookup table for the distance to the nearest obstacle
-        self.dist_lookup_table = None
+        self.dist_lookup_table = np.load('lookup_table/mattbot_map.npy')
 
         # The parameters for the mixing model of probabilities. z_hit + z_random = 1. These weight the probabilities
         self.z_hit = z_hit
@@ -143,43 +143,6 @@ class MonteCarloLocalization:
 
             if self.have_map is False:
                 self.have_map = True
-                print("Generating Lookup Table...")
-                self.generate_dist_lookup_table()
-                print("Lookup Table Generated")
-
-    def generate_dist_lookup_table(self):
-        """
-        Generates a table of distances from the LIDAR sensor to the nearest occupied cell
-        """
-        self.dist_lookup_table = np.zeros((self.map_width, self.map_height))
-        for x in range(self.map_width):
-            for y in range(self.map_height):
-                print("x,y: ", x, y)
-                if self.occupancy.is_unknown((x*self.map_resolution,y*self.map_resolution)):
-                    self.dist_lookup_table[x,y] = -1
-                elif self.occupancy.is_free((x*self.map_resolution,y*self.map_resolution)):
-                    self.dist_lookup_table[x, y] = self.find_closest_obstacle(x, y)
-                else:
-                    self.dist_lookup_table[x, y] = 0
-
-    def find_closest_obstacle(self, x, y):
-        """
-        Finds the closest obstacle to a given cell
-
-        Args:
-            x: The x coordinate of the cell
-            y: The y coordinate of the cell
-        """
-        k = 1
-        while True:
-            for i in np.arange(-k, k+1):
-                for j in np.arange(-k, k+1):
-                    if np.abs(i) == k or np.abs(j) == k:
-                        new_x = np.clip(x+i, 0, self.map_width-1)
-                        new_y = np.clip(y+j, 0, self.map_height-1)
-                        if ~self.occupancy.is_free((new_x*self.map_resolution, new_y*self.map_resolution)):
-                            return np.sqrt(i**2 + j**2)*self.map_resolution
-            k += 1
 
     def odom_callback(self, msg):
         """
