@@ -78,6 +78,8 @@ class MonteCarloLocalization:
         self.prev_particles = None
         self.particles = None
 
+        self.mutex = Lock()
+
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_callback)
         self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback)
         self.map_sub = rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
@@ -107,7 +109,6 @@ class MonteCarloLocalization:
             -0.5 * (self.dist_lookup_table) ** 2 / (self.sigma_hit ** 2)) + self.z_random / LIDAR_MAX_RANGE
         self.prob_lookup_table[unknown_indx] = 1 / LIDAR_MAX_RANGE
 
-        self.mutex = Lock()
 
     def map_md_callback(self, msg):
         """
@@ -147,6 +148,10 @@ class MonteCarloLocalization:
             )
 
             if self.have_map is False:
+                print("Initializing particles...")
+                self.init_particles()
+                print("Particles initialized")
+
                 self.have_map = True
 
     def odom_callback(self, msg):
@@ -196,7 +201,28 @@ class MonteCarloLocalization:
         ranges = np.delete(ranges, nan_indx)
         angles = np.delete(angles, nan_indx)
 
+        if self.have_map:
+            x = [3,3,0]
+            w = self.measurement_model_loop(ranges, x, angles)
+            print("w: ", w)
+
         self.mutex.release()
+
+    def init_particles(self):
+        """
+        Initializes the particles distributed uniformly across the map
+        """
+        self.particles = np.zeros((3, self.num_particles))
+        x = np.random.uniform(0, self.map_width, self.num_particles)
+        y = np.random.uniform(0, self.map_height, self.num_particles)
+        theta = np.random.uniform(-np.pi, np.pi, self.num_particles)
+        for i in range(self.num_particles):
+            while not self.occupancy.is_free(np.array([x[i], y[i]])):
+                x[i] = np.random.uniform(0, self.map_width)
+                y[i] = np.random.uniform(0, self.map_height)
+            self.particles[0, i] = x[i]
+            self.particles[1, i] = y[i]
+            self.particles[2, i] = theta[i]
 
     def sample_motion_model_with_map(self, u, x_prev):
         """
@@ -258,7 +284,6 @@ class MonteCarloLocalization:
                 p = 1/LIDAR_MAX_RANGE
             else:
                 p = self.prob_lookup_table[x_grid, y_grid]
-            print(p)
             q *= p
         return q
 
