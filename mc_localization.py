@@ -93,14 +93,19 @@ class MonteCarloLocalization:
         self.map_resolution = None
         self.map_origin = None
 
-        # This table will be the lookup table for the distance to the nearest obstacle
-        self.dist_lookup_table = np.load('lookup_table/mattbot_map.npy')
-
         # The parameters for the mixing model of probabilities. z_hit + z_random = 1. These weight the probabilities
         self.z_hit = z_hit
         self.sigma_hit = sigma_hit  # standard deviation of the Gaussian
         self.z_random = z_random
         assert self.z_hit + self.z_random == 1, "z_hit + z_random must equal 1"
+
+        # This table will be the lookup table for the distance to the nearest obstacle
+        self.dist_lookup_table = np.load('lookup_table/mattbot_map.npy')
+        unknown_indx = np.where(self.dist_lookup_table == -1)
+
+        self.prob_lookup_table = self.z_hit / np.sqrt(2 * np.pi * (self.sigma_hit ** 2)) * np.exp(
+            -0.5 * (self.dist_lookup_table) ** 2 / (self.sigma_hit ** 2)) + self.z_random / LIDAR_MAX_RANGE
+        self.prob_lookup_table[unknown_indx] = 1 / LIDAR_MAX_RANGE
 
         self.mutex = Lock()
 
@@ -238,6 +243,25 @@ class MonteCarloLocalization:
         """
         return SQRT6DIV2 * (np.random.uniform(-b, b) + np.random.uniform(-b, b))
 
+    def measurement_model_loop(self, z, x, theta_sens):
+        q = 1
+        for i in range(len(z)):
+            x_meas = x[0] + z[i] * np.cos(x[2] + theta_sens[i])
+            y_meas = x[1] + z[i] * np.sin(x[2] + theta_sens[i])
+
+            # x_grid = np.round(x_meas / self.map_resolution).astype(int)
+            # y_grid = np.round(y_meas / self.map_resolution).astype(int)
+            x_grid = np.round(x_meas / 0.05).astype(int)
+            y_grid = np.round(y_meas / 0.05).astype(int)
+
+            if x_grid < 0 or x_grid >= self.map_height or y_grid < 0 or y_grid >= self.map_width:
+                p = 1/LIDAR_MAX_RANGE
+            else:
+                p = self.prob_lookup_table[x_grid, y_grid]
+            print(p)
+            q *= p
+        return q
+
     def measurement_model(self, z, x, theta_sens):
         """
         The measurement model for the LIDAR sensor. This is a likelihood model using distance to nearest neighbor
@@ -249,22 +273,28 @@ class MonteCarloLocalization:
             x: The pose of the robot, a 3xN array (x, y, theta)
             theta_sens: The angle of the sensor relative to the robot's frame, a 1xN array
         """
-        q = 1
-
-
-        x_meas = x[0,:] + z*np.cos(x[2,:] + theta_sens)
-        y_meas = x[1,:] + z*np.sin(x[2,:] + theta_sens)
+        x_array = x[0,:, np.newaxis]
+        y_array = x[1, :, np.newaxis]
+        theta_array = x[2, :, np.newaxis]
+        x_meas = x_array + z*np.cos(theta_array + theta_sens)
+        y_meas = y_array + z*np.sin(theta_array + theta_sens)
 
         # convert x_meas and y_meas to grid coordinates
-        x_grid = np.round(x_meas/self.map_resolution)
-        y_grid = np.round(y_meas/self.map_resolution)
+        x_grid = np.round(x_meas/self.map_resolution).astype(int)
+        y_grid = np.round(y_meas/self.map_resolution).astype(int)
+
+        neg_x = np.where(x_grid < 0)
+        out_of_range_x = np.where(x_grid >= self.map_width)
+        neg_y = np.where(y_grid < 0)
+        out_of_range_y = np.where(y_grid >= self.map_height)
+
+
 
         dist = self.dist_lookup_table[x_grid, y_grid]
-        p_hit = 1/np.sqrt(2*np.pi*(self.sigma_hit**2))*np.exp(-0.5*(dist)**2/(self.sigma_hit**2))
+        p_hit = self.prob_lookup_table[x_grid, y_grid]
         p = self.z_hit*p_hit + self.z_random/LIDAR_MAX_RANGE
 
-        q = q * p
-        return q
+        return np.prod(p)
 
     def resample(self, X, w):
         """
