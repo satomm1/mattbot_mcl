@@ -3,6 +3,9 @@ from nav_msgs.msg import OccupancyGrid, MapMetaData
 import yaml
 import matplotlib.pyplot as plt
 import numpy as np
+import os
+
+from utils.grids import StochOccupancyGrid2D, DetOccupancyGrid2D
 
 class MapPublisher:
     """
@@ -39,6 +42,28 @@ class MapPublisher:
         self.map_data, self.map_metadata = self.load_map(map_file)
         self.resolution = self.map_metadata.resolution
 
+        if os.path.exists('lookup_table/' + map_file + '.npy'):
+            print("Loading Lookup Table...")
+            self.dist_lookup_table = np.load('lookup_table/' + map_file + '.npy')
+            np.save('lookup_table/mattbot_map', self.dist_lookup_table)
+            fig, ax = plt.subplots()
+            cbar = ax.imshow(self.dist_lookup_table, cmap='hot')
+            fig.colorbar(cbar)
+            plt.show()
+        else:
+            print("Generating Lookup Table...")
+            self.dist_lookup_table =self.generate_dist_lookup_table()
+            self.dist_lookup_table = self.dist_lookup_table.T
+            print("Lookup Table Generated")
+            np.save('lookup_table/' + map_file, self.dist_lookup_table)
+
+            np.save('lookup_table/mattbot_map', self.dist_lookup_table)
+
+            fig, ax = plt.subplots()
+            cbar = ax.imshow(self.dist_lookup_table, cmap='hot')
+            fig.colorbar(cbar)
+            plt.show()
+
     def load_map(self, map_file):
         """
         Loads the map from the specified file
@@ -49,7 +74,7 @@ class MapPublisher:
         Returns:
             The map as a 2D occupancy grid
         """
-        with open(map_file, 'r') as f:
+        with open('maps/' + map_file + '.yaml', 'r') as f:
             map_data = yaml.safe_load(f)
 
         pgm_file = map_data['image']
@@ -94,6 +119,57 @@ class MapPublisher:
         md_msg.origin.orientation.w = 1
 
         return flattened_map, md_msg
+
+    def generate_dist_lookup_table(self):
+        """
+        Generates a table of distances from the LIDAR sensor to the nearest occupied cell
+        """
+        self.map_width = self.map_metadata.width
+        self.map_height = self.map_metadata.height
+        self.map_resolution = self.map_metadata.resolution
+        self.map_originx = self.map_metadata.origin.position.x
+        self.map_originy = self.map_metadata.origin.position.y
+
+        self.occupancy = StochOccupancyGrid2D(
+            self.map_resolution,
+            self.map_width,
+            self.map_height,
+            self.map_originx,
+            self.map_originy,
+            3,
+            self.map_data,
+        )
+
+
+        lookup_table = np.zeros((self.map_width, self.map_height))
+        for x in range(self.map_width):
+            for y in range(self.map_height):
+                if self.occupancy.is_unknown((x*self.map_resolution,y*self.map_resolution)):
+                    lookup_table[x,y] = -1
+                elif self.occupancy.is_free((x*self.map_resolution,y*self.map_resolution)):
+                    lookup_table[x, y] = self.find_closest_obstacle(x, y)
+                else:
+                    lookup_table[x, y] = 0
+        return lookup_table
+
+    def find_closest_obstacle(self, x, y):
+        """
+        Finds the closest obstacle to a given cell
+
+        Args:
+            x: The x coordinate of the cell
+            y: The y coordinate of the cell
+        """
+        k = 1
+        while True:
+            for i in np.arange(-k, k+1):
+                for j in np.arange(-k, k+1):
+                    if np.abs(i) == k or np.abs(j) == k:
+                        new_x = np.clip(x+i, 0, self.map_width-1)
+                        new_y = np.clip(y+j, 0, self.map_height-1)
+                        if ~self.occupancy.is_free((new_x*self.map_resolution, new_y*self.map_resolution)):
+                            return np.sqrt(i**2 + j**2)*self.map_resolution
+            k += 1
 
     def publish_map(self, map_data, map_metadata):
         """
