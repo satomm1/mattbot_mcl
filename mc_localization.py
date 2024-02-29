@@ -202,9 +202,11 @@ class MonteCarloLocalization:
         angles = np.delete(angles, nan_indx)
 
         if self.have_map:
-            x = [3,3,0]
-            w = self.measurement_model_loop(ranges, x, angles)
+            w = np.zeros((1, self.num_particles))
+            for i in range(self.num_particles):
+                w[i] = self.measurement_model_loop(ranges, self.particles[:, i], angles)
             print("w: ", w)
+            self.resample(w)
 
         self.mutex.release()
 
@@ -321,7 +323,7 @@ class MonteCarloLocalization:
 
         return np.prod(p)
 
-    def resample(self, X, w):
+    def resample(self, w):
         """
         Resamples the particles:
 
@@ -329,7 +331,7 @@ class MonteCarloLocalization:
             X: The particles: a 3xN array, where N = num_particles
             w: The weights: a 1xN array, where N = num_particles, and the sum of the weights is 1
         """
-        return np.random.choice(X, size=self.num_particles, replace=True, p=w)
+        self.particles = np.random.choice(self.particles, size=self.num_particles, replace=True, p=w)
 
     def mcl(self, X_prev, u, z, theta_sens):
         """
