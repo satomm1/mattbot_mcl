@@ -46,10 +46,10 @@ class MapPublisher:
             print("Loading Lookup Table...")
             self.dist_lookup_table = np.load('lookup_table/' + map_file + '.npy')
             np.save('lookup_table/mattbot_map', self.dist_lookup_table)
-            fig, ax = plt.subplots()
-            cbar = ax.imshow(self.dist_lookup_table, cmap='hot')
-            fig.colorbar(cbar)
-            plt.show()
+            # fig, ax = plt.subplots()
+            # cbar = ax.imshow(self.dist_lookup_table, cmap='hot')
+            # fig.colorbar(cbar)
+            # plt.show()
         else:
             print("Generating Lookup Table...")
             self.dist_lookup_table =self.generate_dist_lookup_table()
@@ -199,6 +199,6 @@ class MapPublisher:
         pass
 
 if __name__ == '__main__':
-    map_file = 'maps/map.yaml'
+    map_file = 'map'
     map_loader = MapPublisher(map_file)
     map_loader.run()
