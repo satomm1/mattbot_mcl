@@ -401,9 +401,11 @@ class MonteCarloLocalization:
         p[neg_y] = 1/LIDAR_MAX_RANGE
         p[out_of_range_y] = 1/LIDAR_MAX_RANGE
         
-        print(np.prod(p*2))
+        #print(np.sum(np.log(p)))
 
-        return np.prod(p*2)
+        # return np.prod(p)
+        #return np.sum(np.log(p))
+        return np.sum(np.power(p,3))
 
     def resample(self, w):
         """
@@ -418,7 +420,7 @@ class MonteCarloLocalization:
             print("Sum = 0")
         else:
             print("Sum neq 0")
-            w = w/np.sum(w)
+            w = w / np.sum(w)
         resample_indx = np.random.choice(np.arange(self.num_particles), size=self.num_particles, replace=True, p=w)
         self.particles = self.particles[:, resample_indx]
 
