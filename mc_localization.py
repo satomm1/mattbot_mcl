@@ -218,7 +218,8 @@ class MonteCarloLocalization:
         if self.have_map:
             w = np.zeros(self.num_particles)
             for i in range(self.num_particles):
-                w[i] = self.measurement_model_loop(ranges, self.particles[:, i], angles)
+                # w[i] = self.measurement_model_loop(ranges, self.particles[:, i], angles)
+                w[i] = self.measurement_model1(ranges, self.particles[:, i], angles)
             print("w: ", w)
             self.resample(w)
 
@@ -348,6 +349,45 @@ class MonteCarloLocalization:
         dist = self.dist_lookup_table[x_grid, y_grid]
         p_hit = self.prob_lookup_table[x_grid, y_grid]
         p = self.z_hit*p_hit + self.z_random/LIDAR_MAX_RANGE
+
+        return np.prod(p)
+
+    def measurement_model1(self, z, x, theta_sens):
+        """
+        The measurement model for the LIDAR sensor. This is a likelihood model using distance to nearest neighbor
+        See Probabilistic Robotics, Table 6.3 pg 172
+
+        This model achieves the measurement model with no loop in z. But, still requires only a single x input
+
+        Args:
+            z: The LIDAR measurement, a 1xN array where N is the number of measurements, we assume all measurements
+                outside of the max range are already removed from this set
+            x: The pose of the robot, a 3x1 array (x, y, theta)
+            theta_sens: The angle of the sensor relative to the robot's frame, a 1xN array
+        """
+        x_meas = x[0] + z*np.cos(x[2] + theta_sens)
+        y_meas = x[1] + z*np.sin(x[2] + theta_sens)
+
+        # convert x_meas and y_meas to grid coordinates
+        x_grid = np.round(x_meas/self.map_resolution).astype(int)
+        y_grid = np.round(y_meas/self.map_resolution).astype(int)
+
+        neg_x = np.where(x_grid < 0)
+        out_of_range_x = np.where(x_grid >= self.map_width)
+        neg_y = np.where(y_grid < 0)
+        out_of_range_y = np.where(y_grid >= self.map_height)
+
+        x_grid_norm = np.clip(x_grid, 0, self.map_width-1)
+        y_grid_norm = np.clip(y_grid, 0, self.map_height-1)
+        # dist = self.dist_lookup_table[x_grid_norm, y_grid_norm]
+
+        p_hit = self.prob_lookup_table[x_grid_norm, y_grid_norm]
+        p = self.z_hit*p_hit + self.z_random/LIDAR_MAX_RANGE
+
+        p[neg_x] = 1/LIDAR_MAX_RANGE
+        p[out_of_range_x] = 1/LIDAR_MAX_RANGE
+        p[neg_y] = 1/LIDAR_MAX_RANGE
+        p[out_of_range_y] = 1/LIDAR_MAX_RANGE
 
         return np.prod(p)
 
