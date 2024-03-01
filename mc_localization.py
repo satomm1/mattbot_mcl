@@ -171,7 +171,7 @@ class MonteCarloLocalization:
 
         self.odom = np.array([x, y, theta])
         if self.prev_odom is not None:
-            if self.prev_odom != self.odom:
+            if not np.array_equal(self.prev_odom, self.odom):
                 u = np.array([self.prev_odom, self.odom]).T
                 if self.particles is not None:
                     for i in range(self.num_particles):
