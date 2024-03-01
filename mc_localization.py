@@ -171,11 +171,12 @@ class MonteCarloLocalization:
 
         self.odom = np.array([x, y, theta])
         if self.prev_odom is not None:
-            u = np.array([self.prev_odom, self.odom])
-            if self.have_map:
-                for i in range(self.num_particles):
-                    self.particles[:, i] = self.sample_motion_model_with_map(u, self.particles[:, i])
-            print("Meas. Model Update")
+            if self.prev_odom != self.odom:
+                u = np.array([self.prev_odom, self.odom]).T
+                if self.particles is not None:
+                    for i in range(self.num_particles):
+                        self.particles[:, i] = self.sample_motion_model_with_map(u, self.particles[:, i])
+                    print("Meas. Model Update")
         self.prev_odom = self.odom
 
         self.mutex.release()
