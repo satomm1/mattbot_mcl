@@ -72,6 +72,13 @@ class StochOccupancyGrid2D(object):
         grid_x = int((x - self.origin_x) / self.resolution)
         grid_y = int((y - self.origin_y) / self.resolution)
         return self.probs[grid_y, grid_x] == -1
+        
+    def prob_x_given_map(self, state):
+        x, y = self.snap_to_grid(state)
+        grid_x = int((x - self.origin_x) / self.resolution)
+        grid_y = int((y - self.origin_y) / self.resolution)
+        
+        return self.probs[grid_y, grid_x]
 
     def plot(self, fig_num=0):
         fig = plt.figure(fig_num)

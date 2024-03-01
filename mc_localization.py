@@ -57,7 +57,7 @@ class MonteCarloLocalization:
         visualization in rviz.
     """
 
-    def __init__(self, num_particles=100, alpha1=1, alpha2=1, alpha3=1, alpha4=1, sigma_hit=0.1, z_hit=0.75, z_random=0.25):
+    def __init__(self, num_particles=100, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.1, z_hit=0.75, z_random=0.25):
         """
         Initializes the Monte Carlo Localization node
         """
@@ -170,13 +170,17 @@ class MonteCarloLocalization:
         _, _, theta = euler_from_quaternion(orientation_list)
 
         self.odom = np.array([x, y, theta])
+        
         if self.prev_odom is not None:
             if not np.array_equal(self.prev_odom, self.odom):
                 u = np.array([self.prev_odom, self.odom]).T
+                print(u.T)
                 if self.particles is not None:
                     for i in range(self.num_particles):
                         self.particles[:, i] = self.sample_motion_model_with_map(u, self.particles[:, i])
                     print("Meas. Model Update")
+                print(self.particles[:,0])
+                self.publish_particles()
         self.prev_odom = self.odom
 
         self.mutex.release()
@@ -230,23 +234,30 @@ class MonteCarloLocalization:
         theta = np.random.uniform(-np.pi, np.pi, self.num_particles)
         for i in range(self.num_particles):
             while not self.occupancy.is_free((x[i], y[i])) or self.occupancy.is_unknown((x[i], y[i])):
-                print("Not free ", x[i], y[i])
+                # print("Not free ", x[i], y[i])
                 x[i] = np.random.uniform(0, self.map_width*self.map_resolution-self.map_resolution)
                 y[i] = np.random.uniform(0, self.map_height*self.map_resolution-self.map_resolution)
             self.particles[0, i] = x[i]
             self.particles[1, i] = y[i]
             self.particles[2, i] = theta[i]
         self.publish_particles()
-        print(self.particles)
+        print(self.particles[:,0])
+        # print(self.particles)
 
     def sample_motion_model_with_map(self, u, x_prev):
         """
         Samples the motion model with the map
         """
         pi = 0
+        num_stuck = 0
         while pi <= 0:
             x = self.sample_motion_model(u, x_prev)
             pi = self.occupancy.is_free(x)
+            # pi = self.occupancy.prob_x_given_map(x)
+            num_stuck += 1
+            
+            if num_stuck > 10:
+            	return x_prev
         return x
 
     def sample_motion_model(self, u, x_prev):
@@ -269,6 +280,7 @@ class MonteCarloLocalization:
         xp = x_prev[0] + delta_trans_hat * np.cos(x_prev[2] + delta_rot1_hat)
         yp = x_prev[1] + delta_trans_hat * np.sin(x_prev[2] + delta_rot1_hat)
         tp = x_prev[2] + delta_rot1_hat + delta_rot2_hat
+        tp = self.wrap_theta(tp)
 
         return np.array([xp, yp, tp])
 
@@ -283,6 +295,9 @@ class MonteCarloLocalization:
         Samples a value from a triangular distribution with mean 0 and standard deviation b
         """
         return SQRT6DIV2 * (np.random.uniform(-b, b) + np.random.uniform(-b, b))
+        
+    def wrap_theta(self, theta):
+        return (theta + np.pi) % (2 * np.pi) - np.pi
 
     def measurement_model_loop(self, z, x, theta_sens):
         q = 1
