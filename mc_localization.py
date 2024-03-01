@@ -169,6 +169,15 @@ class MonteCarloLocalization:
         orientation_list = [orientation.x, orientation.y, orientation.z, orientation.w]
         _, _, theta = euler_from_quaternion(orientation_list)
 
+        self.odom = np.array([x, y, theta])
+        if self.prev_odom is not None:
+            u = np.array([self.prev_odom, self.odom])
+            if self.have_map:
+                for i in range(self.num_particles):
+                    self.particles[:, i] = self.sample_motion_model_with_map(u, self.particles[:, i])
+            print("Meas. Model Update")
+        self.prev_odom = self.odom
+
         self.mutex.release()
 
     def scan_callback(self, msg):
