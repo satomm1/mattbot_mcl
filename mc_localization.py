@@ -232,9 +232,11 @@ class MonteCarloLocalization:
             while not self.occupancy.is_free(np.array([x[i], y[i]])):
                 x[i] = np.random.uniform(0, self.map_width)
                 y[i] = np.random.uniform(0, self.map_height)
-            self.particles[0, i] = x[i]
-            self.particles[1, i] = y[i]
+            self.particles[0, i] = x[i]*self.map_resolution
+            self.particles[1, i] = y[i]*self.map_resolution
             self.particles[2, i] = theta[i]
+        self.publish_particles()
+        print(self.particles)
 
     def sample_motion_model_with_map(self, u, x_prev):
         """
@@ -385,7 +387,9 @@ class MonteCarloLocalization:
         particle_msg = MarkerArray()
         for i in range(100):
             marker = Marker()
+            marker.id = i
             marker.header.stamp = rospy.Time.now()
+            marker.header.frame_id = 'map'
             marker.pose.position.x = self.particles[0, i]
             marker.pose.position.y = self.particles[1, i]
             particle_msg.markers.append(marker)
