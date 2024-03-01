@@ -225,15 +225,16 @@ class MonteCarloLocalization:
         Initializes the particles distributed uniformly across the map
         """
         self.particles = np.zeros((3, self.num_particles))
-        x = np.random.uniform(0, self.map_width, self.num_particles)
-        y = np.random.uniform(0, self.map_height, self.num_particles)
+        x = np.random.uniform(0, self.map_width*self.map_resolution-self.map_resolution, self.num_particles)
+        y = np.random.uniform(0, self.map_height*self.map_resolution-self.map_resolution, self.num_particles)
         theta = np.random.uniform(-np.pi, np.pi, self.num_particles)
         for i in range(self.num_particles):
-            while not self.occupancy.is_free(np.array([x[i], y[i]])):
-                x[i] = np.random.uniform(0, self.map_width)
-                y[i] = np.random.uniform(0, self.map_height)
-            self.particles[0, i] = x[i]*self.map_resolution
-            self.particles[1, i] = y[i]*self.map_resolution
+            while not self.occupancy.is_free((x[i], y[i])) or self.occupancy.is_unknown((x[i], y[i])):
+                print("Not free ", x[i], y[i])
+                x[i] = np.random.uniform(0, self.map_width*self.map_resolution-self.map_resolution)
+                y[i] = np.random.uniform(0, self.map_height*self.map_resolution-self.map_resolution)
+            self.particles[0, i] = x[i]
+            self.particles[1, i] = y[i]
             self.particles[2, i] = theta[i]
         self.publish_particles()
         print(self.particles)
@@ -392,6 +393,16 @@ class MonteCarloLocalization:
             marker.header.frame_id = 'map'
             marker.pose.position.x = self.particles[0, i]
             marker.pose.position.y = self.particles[1, i]
+            marker.pose.orientation.w = 1
+            marker.type = marker.SPHERE
+            marker.action = marker.ADD
+            marker.scale.x = 0.025
+            marker.scale.y = 0.025
+            marker.scale.z = 0.025
+            marker.color.a = 1.0
+            marker.color.r = 1.0
+            marker.color.g = 0.0
+            marker.color.b = 0.0
             particle_msg.markers.append(marker)
         self.particle_pub.publish(particle_msg)
 
