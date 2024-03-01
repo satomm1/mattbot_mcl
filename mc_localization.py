@@ -8,6 +8,7 @@ from tf.transformations import euler_from_quaternion
 from visualization_msgs.msg import Marker
 
 import numpy as np
+import matplotlib.pyplot as plt
 from threading import Thread, Lock
 from utils.grids import StochOccupancyGrid2D, DetOccupancyGrid2D
 
@@ -57,7 +58,7 @@ class MonteCarloLocalization:
         visualization in rviz.
     """
 
-    def __init__(self, num_particles=100, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.1, z_hit=0.75, z_random=0.25):
+    def __init__(self, num_particles=100, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.3, z_hit=0.75, z_random=0.25):
         """
         Initializes the Monte Carlo Localization node
         """
@@ -108,6 +109,11 @@ class MonteCarloLocalization:
         self.prob_lookup_table = self.z_hit / np.sqrt(2 * np.pi * (self.sigma_hit ** 2)) * np.exp(
             -0.5 * (self.dist_lookup_table) ** 2 / (self.sigma_hit ** 2)) + self.z_random / LIDAR_MAX_RANGE
         self.prob_lookup_table[unknown_indx] = 1 / LIDAR_MAX_RANGE
+        
+        # fig, ax = plt.subplots()
+        # cbar = ax.imshow(self.prob_lookup_table, cmap='hot')
+        # fig.colorbar(cbar)
+        # plt.show()
 
 
     def map_md_callback(self, msg):
@@ -169,19 +175,21 @@ class MonteCarloLocalization:
         orientation_list = [orientation.x, orientation.y, orientation.z, orientation.w]
         _, _, theta = euler_from_quaternion(orientation_list)
 
-        self.odom = np.array([x, y, theta])
+        if np.abs(x) < 1e5 and np.abs(y) < 1e5 and np.abs(theta) < 1e5:
+
+            self.odom = np.array([x, y, theta])
         
-        if self.prev_odom is not None:
-            if not np.array_equal(self.prev_odom, self.odom):
-                u = np.array([self.prev_odom, self.odom]).T
-                print(u.T)
-                if self.particles is not None:
-                    for i in range(self.num_particles):
-                        self.particles[:, i] = self.sample_motion_model_with_map(u, self.particles[:, i])
-                    print("Meas. Model Update")
-                print(self.particles[:,0])
-                self.publish_particles()
-        self.prev_odom = self.odom
+            if self.prev_odom is not None:
+                if not np.array_equal(self.prev_odom, self.odom):
+                    u = np.array([self.prev_odom, self.odom]).T
+                    # print(u.T)
+                    if self.particles is not None:
+                        for i in range(self.num_particles):
+                            self.particles[:, i] = self.sample_motion_model_with_map(u, self.particles[:, i])
+                        print("Motion Model Update")
+                    # print(self.particles[:,0])
+                    self.publish_particles()
+            self.prev_odom = self.odom
 
         self.mutex.release()
 
@@ -220,7 +228,8 @@ class MonteCarloLocalization:
             for i in range(self.num_particles):
                 # w[i] = self.measurement_model_loop(ranges, self.particles[:, i], angles)
                 w[i] = self.measurement_model1(ranges, self.particles[:, i], angles)
-            print("w: ", w)
+            # print("w: ", w / np.sum(w))
+            print("Measurement Model Update")
             self.resample(w)
 
         self.mutex.release()
@@ -373,23 +382,28 @@ class MonteCarloLocalization:
         y_grid = np.round(y_meas/self.map_resolution).astype(int)
 
         neg_x = np.where(x_grid < 0)
-        out_of_range_x = np.where(x_grid >= self.map_width)
+        out_of_range_x = np.where(x_grid >= self.map_height)
         neg_y = np.where(y_grid < 0)
-        out_of_range_y = np.where(y_grid >= self.map_height)
+        out_of_range_y = np.where(y_grid >= self.map_width)
 
-        x_grid_norm = np.clip(x_grid, 0, self.map_width-1)
-        y_grid_norm = np.clip(y_grid, 0, self.map_height-1)
+        x_grid_norm = np.clip(x_grid, 0, self.map_height-1)
+        y_grid_norm = np.clip(y_grid, 0, self.map_width-1)
         # dist = self.dist_lookup_table[x_grid_norm, y_grid_norm]
 
         p_hit = self.prob_lookup_table[x_grid_norm, y_grid_norm]
+        
+        
+        
         p = self.z_hit*p_hit + self.z_random/LIDAR_MAX_RANGE
 
         p[neg_x] = 1/LIDAR_MAX_RANGE
         p[out_of_range_x] = 1/LIDAR_MAX_RANGE
         p[neg_y] = 1/LIDAR_MAX_RANGE
         p[out_of_range_y] = 1/LIDAR_MAX_RANGE
+        
+        print(np.prod(p*2))
 
-        return np.prod(p)
+        return np.prod(p*2)
 
     def resample(self, w):
         """
@@ -401,7 +415,9 @@ class MonteCarloLocalization:
         """
         if np.sum(w) == 0:
             w = np.ones(self.num_particles)/self.num_particles
+            print("Sum = 0")
         else:
+            print("Sum neq 0")
             w = w/np.sum(w)
         resample_indx = np.random.choice(np.arange(self.num_particles), size=self.num_particles, replace=True, p=w)
         self.particles = self.particles[:, resample_indx]
@@ -441,7 +457,7 @@ class MonteCarloLocalization:
         Publishes the particles as a MarkerArray for visualization in rviz
         """
         particle_msg = MarkerArray()
-        for i in range(100):
+        for i in range(self.num_particles):
             marker = Marker()
             marker.id = i
             marker.header.stamp = rospy.Time.now()
