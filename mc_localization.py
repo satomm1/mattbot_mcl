@@ -224,13 +224,14 @@ class MonteCarloLocalization:
         angles = np.delete(angles, nan_indx)
 
         if self.have_map:
-            w = np.zeros(self.num_particles)
-            for i in range(self.num_particles):
-                # w[i] = self.measurement_model_loop(ranges, self.particles[:, i], angles)
-                w[i] = self.measurement_model1(ranges, self.particles[:, i], angles)
-            # print("w: ", w / np.sum(w))
+            # w = np.zeros(self.num_particles)
+            # for i in range(self.num_particles):
+            #     # w[i] = self.measurement_model_loop(ranges, self.particles[:, i], angles)
+            #     w[i] = self.measurement_model1(ranges, self.particles[:, i], angles)
+            w = self.measurement_model2(ranges, self.particles, angles)
             print("Measurement Model Update")
             self.resample(w)
+            self.publish_particles()
 
         self.mutex.release()
 
@@ -267,7 +268,7 @@ class MonteCarloLocalization:
             num_stuck += 1
             
             if num_stuck > 10:
-            	return x_prev
+                return x_prev
         return x
 
     def sample_motion_model(self, u, x_prev):
@@ -309,16 +310,27 @@ class MonteCarloLocalization:
     def wrap_theta(self, theta):
         return (theta + np.pi) % (2 * np.pi) - np.pi
 
-    def measurement_model_loop(self, z, x, theta_sens):
+    def measurement_model0(self, z, x, theta_sens):
+        """
+        The measurement model for the LIDAR sensor. This is a likelihood model using distance to nearest neighbor
+        See Probabilistic Robotics, Table 6.3 pg 172
+
+        This model achieves the measurement model with a loop in z (measurement) and in x (particles)
+        This implementation is slow...
+
+        Args:
+            z: The LIDAR measurement, a 1xN array where N is the number of measurements, we assume all measurements
+                outside of the max range are already removed from this set
+            x: The pose of the robot, a 3x1 array (x, y, theta)
+            theta_sens: The angle of the sensor relative to the robot's frame, a 1xN array
+        """
         q = 1
         for i in range(len(z)):
             x_meas = x[0] + z[i] * np.cos(x[2] + theta_sens[i])
             y_meas = x[1] + z[i] * np.sin(x[2] + theta_sens[i])
 
-            # x_grid = np.round(x_meas / self.map_resolution).astype(int)
-            # y_grid = np.round(y_meas / self.map_resolution).astype(int)
-            x_grid = np.round(x_meas / 0.05).astype(int)
-            y_grid = np.round(y_meas / 0.05).astype(int)
+            x_grid = np.round(x_meas / self.map_resolution).astype(int)
+            y_grid = np.round(y_meas / self.map_resolution).astype(int)
 
             if x_grid < 0 or x_grid >= self.map_height or y_grid < 0 or y_grid >= self.map_width:
                 p = 1/LIDAR_MAX_RANGE
@@ -327,46 +339,13 @@ class MonteCarloLocalization:
             q *= p
         return q
 
-    def measurement_model(self, z, x, theta_sens):
-        """
-        The measurement model for the LIDAR sensor. This is a likelihood model using distance to nearest neighbor
-        See Probabilistic Robotics, Table 6.3 pg 172
-
-        Args:
-            z: The LIDAR measurement, a 1xN array where N is the number of measurements, we assume all measurements
-                outside of the max range are already removed from this set
-            x: The pose of the robot, a 3xN array (x, y, theta)
-            theta_sens: The angle of the sensor relative to the robot's frame, a 1xN array
-        """
-        x_array = x[0,:, np.newaxis]
-        y_array = x[1, :, np.newaxis]
-        theta_array = x[2, :, np.newaxis]
-        x_meas = x_array + z*np.cos(theta_array + theta_sens)
-        y_meas = y_array + z*np.sin(theta_array + theta_sens)
-
-        # convert x_meas and y_meas to grid coordinates
-        x_grid = np.round(x_meas/self.map_resolution).astype(int)
-        y_grid = np.round(y_meas/self.map_resolution).astype(int)
-
-        neg_x = np.where(x_grid < 0)
-        out_of_range_x = np.where(x_grid >= self.map_width)
-        neg_y = np.where(y_grid < 0)
-        out_of_range_y = np.where(y_grid >= self.map_height)
-
-
-
-        dist = self.dist_lookup_table[x_grid, y_grid]
-        p_hit = self.prob_lookup_table[x_grid, y_grid]
-        p = self.z_hit*p_hit + self.z_random/LIDAR_MAX_RANGE
-
-        return np.prod(p)
-
     def measurement_model1(self, z, x, theta_sens):
         """
         The measurement model for the LIDAR sensor. This is a likelihood model using distance to nearest neighbor
         See Probabilistic Robotics, Table 6.3 pg 172
 
-        This model achieves the measurement model with no loop in z. But, still requires only a single x input
+        This model achieves the measurement model with no loop in z. But, still requires only a single x input.
+        This model achieves approx 10x speedup over measurement_model0, which has to loop over measurements
 
         Args:
             z: The LIDAR measurement, a 1xN array where N is the number of measurements, we assume all measurements
@@ -374,6 +353,7 @@ class MonteCarloLocalization:
             x: The pose of the robot, a 3x1 array (x, y, theta)
             theta_sens: The angle of the sensor relative to the robot's frame, a 1xN array
         """
+        # Calculate the x and y coordinates of the measurements in the map frame
         x_meas = x[0] + z*np.cos(x[2] + theta_sens)
         y_meas = x[1] + z*np.sin(x[2] + theta_sens)
 
@@ -381,31 +361,68 @@ class MonteCarloLocalization:
         x_grid = np.round(x_meas/self.map_resolution).astype(int)
         y_grid = np.round(y_meas/self.map_resolution).astype(int)
 
-        neg_x = np.where(x_grid < 0)
-        out_of_range_x = np.where(x_grid >= self.map_height)
-        neg_y = np.where(y_grid < 0)
-        out_of_range_y = np.where(y_grid >= self.map_width)
+        # Get indices of out of range locations
+        out_of_range_x = np.where((x_grid < 0) | (x_grid >= self.map_height))
+        out_of_range_y = np.where((y_grid < 0) | (y_grid >= self.map_width))
 
+        # Clip the grid coordinates to be within the map
         x_grid_norm = np.clip(x_grid, 0, self.map_height-1)
         y_grid_norm = np.clip(y_grid, 0, self.map_width-1)
-        # dist = self.dist_lookup_table[x_grid_norm, y_grid_norm]
 
-        p_hit = self.prob_lookup_table[x_grid_norm, y_grid_norm]
-        
-        
-        
-        p = self.z_hit*p_hit + self.z_random/LIDAR_MAX_RANGE
+        # Look up the probabilities from the precomputed table
+        p = self.prob_lookup_table[x_grid_norm, y_grid_norm]
 
-        p[neg_x] = 1/LIDAR_MAX_RANGE
+        # Set out of range locations to 1 / LIDAR_MAX_RANGE (these are unknown locations)
         p[out_of_range_x] = 1/LIDAR_MAX_RANGE
-        p[neg_y] = 1/LIDAR_MAX_RANGE
         p[out_of_range_y] = 1/LIDAR_MAX_RANGE
-        
-        #print(np.sum(np.log(p)))
 
-        # return np.prod(p)
-        #return np.sum(np.log(p))
+        # Instead of doing product of all probabilities, we sum p^3 as a heuristic
         return np.sum(np.power(p,3))
+
+    def measurement_model2(self, z, x, theta_sens):
+        """
+        The measurement model for the LIDAR sensor. This is a likelihood model using distance to nearest neighbor
+        See Probabilistic Robotics, Table 6.3 pg 172
+
+        This model achieves the measurement model with no loop in z and takes multiple x particles as input
+        This model achieves approx 10x speedup over measurement_model1, which has to loop over particles
+
+        Args:
+            z: The LIDAR measurement, a 1xN array where N is the number of measurements, we assume all measurements
+                outside of the max range are already removed from this set
+            x: The pose of the robot, a 3xM array (x, y, theta), M is number of particles
+            theta_sens: The angle of the sensor relative to the robot's frame, a 1xN array
+        """
+        n = len(z)  # number of measurements
+
+        # Tile the x array to match the number of measurements
+        x_tiled = np.tile(x[:, :, np.newaxis], (1, 1, n))
+
+        # Calculate the x and y coordinates of the measurements in the map frame
+        x_meas = x_tiled[0, :, :] + z * np.cos(x_tiled[2, :, :] + theta_sens)
+        y_meas = x_tiled[1, :, :] + z * np.sin(x_tiled[2, :, :] + theta_sens)
+
+        # convert x_meas and y_meas to grid coordinates
+        x_grid = np.round(x_meas / self.map_resolution).astype(int)
+        y_grid = np.round(y_meas / self.map_resolution).astype(int)
+
+        # Get indices of out of range locations
+        out_of_range_x = np.where((x_grid < 0) | (x_grid >= self.map_height))
+        out_of_range_y = np.where((y_grid < 0) | (y_grid >= self.map_width))
+
+        # Clip the grid coordinates to be within the map
+        x_grid_norm = np.clip(x_grid, 0, self.map_height - 1)
+        y_grid_norm = np.clip(y_grid, 0, self.map_width - 1)
+
+        # Look up the probabilities from the precomputed table
+        p = self.prob_lookup_table[x_grid_norm, y_grid_norm]
+
+        # Set out of range locations to 1 / LIDAR_MAX_RANGE (these are unknown locations)
+        p[out_of_range_x[0], out_of_range_x[1]] = 1 / LIDAR_MAX_RANGE
+        p[out_of_range_y[0], out_of_range_y[1]] = 1 / LIDAR_MAX_RANGE
+
+        # Instead of doing product of all probabilities, we sum p^3 as a heuristic
+        return np.sum(np.power(p, 3), axis=1)
 
     def resample(self, w):
         """
@@ -423,19 +440,6 @@ class MonteCarloLocalization:
             w = w / np.sum(w)
         resample_indx = np.random.choice(np.arange(self.num_particles), size=self.num_particles, replace=True, p=w)
         self.particles = self.particles[:, resample_indx]
-
-    def mcl(self, X_prev, u, z, theta_sens):
-        """
-        Implements the Monte Carlo Localization algorithm
-        """
-        X_bar = np.zeros((3, self.num_particles))
-        w = np.zeros((1, self.num_particles))
-        for m in range(self.num_particles):
-            x_new = self.sample_motion_model_with_map(u, X_prev[:, m])
-            w[m] = self.measurement_model(z, x_new, theta_sens)
-            X_bar[:, m] = x_new
-        X = self.resample(X_bar, w)
-        self.X_prev = X
 
     def estimate_pose(self):
         """
