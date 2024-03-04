@@ -58,7 +58,7 @@ class MonteCarloLocalization:
         visualization in rviz.
     """
 
-    def __init__(self, num_particles=100, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.3, z_hit=0.75, z_random=0.25):
+    def __init__(self, num_particles=200, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.3, z_hit=0.75, z_random=0.25):
         """
         Initializes the Monte Carlo Localization node
         """
@@ -86,8 +86,8 @@ class MonteCarloLocalization:
         self.w_slow = 0
         self.w_fast = 0
         self.w_avg = 0
-        self.alpha_slow = 1
-        self.alpha_fast = 100
+        self.alpha_slow = 0.01
+        self.alpha_fast = 1000
 
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_callback)
         self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback)
