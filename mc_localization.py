@@ -12,6 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from threading import Thread, Lock
 from utils.grids import StochOccupancyGrid2D, DetOccupancyGrid2D
+import time
 
 SQRT6DIV2 = np.sqrt(6)/2
 LIDAR_MAX_RANGE = 16  # FIXME TO BE DETERMINED
@@ -59,7 +60,7 @@ class MonteCarloLocalization:
         visualization in rviz.
     """
 
-    def __init__(self, num_particles=200, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.3, z_hit=0.75, z_random=0.25):
+    def __init__(self, num_particles=300, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.3, z_hit=0.75, z_random=0.25):
         """
         Initializes the Monte Carlo Localization node
         """
@@ -80,6 +81,7 @@ class MonteCarloLocalization:
         self.num_particles = num_particles
         self.prev_particles = None
         self.particles = None
+        self.pub_particle_indx = 0
 
         self.mutex = Lock()
 
@@ -136,7 +138,6 @@ class MonteCarloLocalization:
             self.map_height = msg.height
             self.map_resolution = msg.resolution
             self.map_origin = (msg.origin.position.x, msg.origin.position.y)
-            print(msg.width, msg.height)
 
     def map_callback(self, msg):
         """
@@ -178,7 +179,10 @@ class MonteCarloLocalization:
         Args:
             msg: Odometry message
         """
+        
         self.mutex.acquire()
+        t1 = time.time()
+
 
         # Get the x, y, and theta from the odometry message
         x = msg.pose.pose.position.x
@@ -197,9 +201,6 @@ class MonteCarloLocalization:
 
                 # Only update particles if the odometry has changed
                 if not np.array_equal(self.prev_odom, self.odom):
-                    print(self.prev_odom)
-                    print(self.odom)
-                    print()
                     self.moving = True
 
                     # Update the particles based on the odometry data
@@ -213,14 +214,23 @@ class MonteCarloLocalization:
                         print("Motion Model Update")
 
                     # Publish the particles for visualization
-                    self.publish_particles()
+                    if self.pub_particle_indx == 30:
+                        self.pub_particle_indx = 0
+                        self.publish_particles()
+                    self.pub_particle_indx += 1
+                    # self.publish_particles()
+                    
+                    t2 = time.time()
+                    print("Motion: ", t2-t1)
                 else:
                     self.moving = False
 
             # Store odometry data for next time
             self.prev_odom = self.odom
 
+        
         self.mutex.release()
+        
 
     def scan_callback(self, msg):
         """
@@ -229,7 +239,10 @@ class MonteCarloLocalization:
         Args:
             msg: LaserScan message
         """
+        
         self.mutex.acquire()
+        t1 = time.time()
+
 
         # Get the LIDAR measurements
         ranges = np.array(msg.ranges)
@@ -240,8 +253,9 @@ class MonteCarloLocalization:
         range_max = msg.range_max
 
         angles = np.arange(angle_min, angle_max, angle_increment)
-        # indx_max = np.where(ranges > range_max)
-        # indx_min = np.where(ranges < range_min)
+        
+        ranges = ranges[::2]
+        angles = angles[::2]
         valid_indx = np.where((ranges < range_max) & (ranges > range_min))
 
         # delete out of range values
@@ -264,16 +278,21 @@ class MonteCarloLocalization:
             #     # w[i] = self.measurement_model_loop(ranges, self.particles[:, i], angles)
             #     w[i] = self.measurement_model1(ranges, self.particles[:, i], angles)
 
+            t3 = time.time()
             # Get particle weights based on measurements
             w = self.measurement_model2(ranges, self.particles, angles)
-            print("Measurement Model Update")
-
+            # print("Measurement Model Update")
+            t4 = time.time()
             # Resample the particles based on the weights
             self.resample(w)
 
             # Publish the particles for visualization
-            self.publish_particles()
+            # self.publish_particles()
 
+            t2 = time.time()
+            print("Measurement Total: ", t2-t1)
+            # print("Measurement Model: ", t4-t3)
+            # print("Measurement Resample: ", t2-t4)
         self.mutex.release()
 
     def init_particles(self):
@@ -286,15 +305,12 @@ class MonteCarloLocalization:
         theta = np.random.uniform(-np.pi, np.pi, self.num_particles)
         for i in range(self.num_particles):
             while not self.occupancy.is_free((x[i], y[i])) or self.occupancy.is_unknown((x[i], y[i])):
-                # print("Not free ", x[i], y[i])
                 x[i] = np.random.uniform(0, self.map_width*self.map_resolution-self.map_resolution)
                 y[i] = np.random.uniform(0, self.map_height*self.map_resolution-self.map_resolution)
             self.particles[0, i] = x[i]
             self.particles[1, i] = y[i]
             self.particles[2, i] = theta[i]
         self.publish_particles()
-        print(self.particles[:,0])
-        # print(self.particles)
 
     def sample_motion_model_with_map(self, u, x_prev):
         """
@@ -485,12 +501,16 @@ class MonteCarloLocalization:
         """
         n = len(z)  # number of measurements
 
+        
         # Tile the x array to match the number of measurements
         x_tiled = np.tile(x[:, :, np.newaxis], (1, 1, n))
 
+        # t1 = time.time()
         # Calculate the x and y coordinates of the measurements in the map frame
         x_meas = x_tiled[0, :, :] + z * np.cos(x_tiled[2, :, :] + theta_sens)
         y_meas = x_tiled[1, :, :] + z * np.sin(x_tiled[2, :, :] + theta_sens)
+        # t2 = time.time()
+        # print(t2 - t1)        
 
         # convert x_meas and y_meas to grid coordinates
         x_grid = np.round(x_meas / self.map_resolution).astype(int)
