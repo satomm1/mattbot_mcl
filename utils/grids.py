@@ -48,7 +48,11 @@ class StochOccupancyGrid2D(object):
     def snap_to_grid(self, x):
         return (self.resolution*round(x[0]/self.resolution), self.resolution*round(x[1]/self.resolution))
 
+    def snap_to_grid1(self, x):
+        return (self.resolution * np.round(x[0] / self.resolution), self.resolution * np.round(x[1] / self.resolution))
+
     def is_free(self, state):
+
         # combine the probabilities of each cell by assuming independence
         # of each estimation
         x, y = self.snap_to_grid(state)
@@ -65,7 +69,37 @@ class StochOccupancyGrid2D(object):
         prob_window = self.probs[grid_y_lower:grid_y_upper, grid_x_lower:grid_x_upper]
         p_total = np.prod(1. - np.maximum(prob_window / 100., 0.))
 
-        return (1. - p_total) < self.thresh          
+        return (1. - p_total) < self.thresh
+
+    def is_free1(self, state):
+        """
+        Determine if a state is free based on the occupancy grid. This function allows multiple states to be tested
+        with a single function call.
+
+        :param state: represents different x,y positions of interest. 2xN array (or 3xN if you want to include theta)
+        :return: an array of length N indicating if each corresponding state is free
+        """
+
+        # combine the probabilities of each cell by assuming independence
+        # of each estimation
+        x, y = self.snap_to_grid1(state)
+        grid_x = ((x - self.origin_x) / self.resolution).astype(int)
+        grid_y = ((y - self.origin_y) / self.resolution).astype(int)
+
+        # Now check probabilities
+        half_size = int(round((self.window_size - 1) / 2))
+        grid_x_lower = np.maximum(0, grid_x - half_size)
+        grid_y_lower = np.maximum(0, grid_y - half_size)
+        grid_x_upper = np.minimum(self.width, grid_x + half_size + 1)
+        grid_y_upper = np.minimum(self.height, grid_y + half_size + 1)
+
+        free_list = []
+        for i in range(len(grid_x)):
+            prob_window = self.probs[grid_y_lower[i]:grid_y_upper[i], grid_x_lower[i]:grid_x_upper[i]]
+            p_total = np.prod(1. - np.maximum(prob_window / 100., 0.))
+            free_list.append((1. - p_total) < self.thresh)
+
+        return np.array(free_list)
 
     def is_unknown(self, state):
         x, y = self.snap_to_grid(state)

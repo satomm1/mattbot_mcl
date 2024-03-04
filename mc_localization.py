@@ -106,6 +106,7 @@ class MonteCarloLocalization:
         self.dist_lookup_table = np.load('lookup_table/mattbot_map.npy')
         unknown_indx = np.where(self.dist_lookup_table == -1)
 
+        # Generate the probability lookup table based on distance to nearest obstacle
         self.prob_lookup_table = self.z_hit / np.sqrt(2 * np.pi * (self.sigma_hit ** 2)) * np.exp(
             -0.5 * (self.dist_lookup_table) ** 2 / (self.sigma_hit ** 2)) + self.z_random / LIDAR_MAX_RANGE
         self.prob_lookup_table[unknown_indx] = 1 / LIDAR_MAX_RANGE
@@ -125,10 +126,12 @@ class MonteCarloLocalization:
         Args:
             msg: MapMetaData message
         """
-        self.map_width = msg.width
-        self.map_height = msg.height
-        self.map_resolution = msg.resolution
-        self.map_origin = (msg.origin.position.x, msg.origin.position.y)
+        if (self.have_map is False):
+            # Store map metadata
+            self.map_width = msg.width
+            self.map_height = msg.height
+            self.map_resolution = msg.resolution
+            self.map_origin = (msg.origin.position.x, msg.origin.position.y)
 
     def map_callback(self, msg):
         """
@@ -139,10 +142,11 @@ class MonteCarloLocalization:
         Args:
             msg: OccupancyGrid message
         """
-        self.map_probs = msg.data
-        # if we've received the map metadata and have a way to update it:
-        if (self.map_width is not None and self.map_height is not None and len(self.map_probs) > 0):
 
+        # If we've received the map metadata and have a way to update it:
+        if (self.have_map is False and self.map_width is not None and self.map_height is not None):
+
+            # Create occupancy grid object
             self.occupancy = StochOccupancyGrid2D(
                 self.map_resolution,
                 self.map_width,
@@ -150,24 +154,28 @@ class MonteCarloLocalization:
                 self.map_origin[0],
                 self.map_origin[1],
                 5,
-                self.map_probs,
+                msg.data,
             )
 
-            if self.have_map is False:
-                print("Initializing particles...")
-                self.init_particles()
-                print("Particles initialized")
+            # Initialize the particles
+            print("Initializing particles...")
+            self.init_particles()
+            print("Particles initialized")
 
-                self.have_map = True
+            self.have_map = True
 
     def odom_callback(self, msg):
         """
-        Callback function for the odometry subscriber
+        Callback function for the odometry subscribe
+
+        Updates the particles based on the odometry data by colling sample_motion_model_with_map
 
         Args:
             msg: Odometry message
         """
         self.mutex.acquire()
+
+        # Get the x, y, and theta from the odometry message
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
 
@@ -175,20 +183,30 @@ class MonteCarloLocalization:
         orientation_list = [orientation.x, orientation.y, orientation.z, orientation.w]
         _, _, theta = euler_from_quaternion(orientation_list)
 
+        # Sometimes odometry data is bad and we get really large values, only update if have reasonable values
         if np.abs(x) < 1e5 and np.abs(y) < 1e5 and np.abs(theta) < 1e5:
 
             self.odom = np.array([x, y, theta])
         
             if self.prev_odom is not None:
+
+                # Only update particles if the odometry has changed
                 if not np.array_equal(self.prev_odom, self.odom):
+
+                    # Update the particles based on the odometry data
                     u = np.array([self.prev_odom, self.odom]).T
-                    # print(u.T)
                     if self.particles is not None:
-                        for i in range(self.num_particles):
-                            self.particles[:, i] = self.sample_motion_model_with_map(u, self.particles[:, i])
+
+                        # Loop through each particle and update it based on the odometry data
+                        # for i in range(self.num_particles):
+                        #     self.particles[:, i] = self.sample_motion_model_with_map(u, self.particles[:, i])
+                        self.particles = self.sample_motion_model_with_map1(u, self.particles)
                         print("Motion Model Update")
-                    # print(self.particles[:,0])
+
+                    # Publish the particles for visualization
                     self.publish_particles()
+
+            # Store odometry data for next time
             self.prev_odom = self.odom
 
         self.mutex.release()
@@ -201,6 +219,8 @@ class MonteCarloLocalization:
             msg: LaserScan message
         """
         self.mutex.acquire()
+
+        # Get the LIDAR measurements
         ranges = np.array(msg.ranges)
         angle_min = msg.angle_min
         angle_max = msg.angle_max
@@ -228,9 +248,15 @@ class MonteCarloLocalization:
             # for i in range(self.num_particles):
             #     # w[i] = self.measurement_model_loop(ranges, self.particles[:, i], angles)
             #     w[i] = self.measurement_model1(ranges, self.particles[:, i], angles)
+
+            # Get particle weights based on measurements
             w = self.measurement_model2(ranges, self.particles, angles)
             print("Measurement Model Update")
+
+            # Resample the particles based on the weights
             self.resample(w)
+
+            # Publish the particles for visualization
             self.publish_particles()
 
         self.mutex.release()
@@ -271,6 +297,29 @@ class MonteCarloLocalization:
                 return x_prev
         return x
 
+    def sample_motion_model_with_map1(self, u, x_prev):
+        """
+        Samples the motion model with the map, does not require loop in M
+
+        Args:
+            x_prev: The previous pose of the robot, a 3xM array (x, y, theta)
+        """
+        pi = 1
+        num_stuck = 0
+        not_free_indx = np.arange(x_prev.shape[1])
+        x = x_prev
+        while np.sum(pi) < x_prev.shape[1]:
+            if num_stuck > 10:
+                x[: , not_free_indx] = x_prev[: , not_free_indx]
+                return x
+
+            x[:, not_free_indx] = self.sample_motion_model1(u, x_prev[:, not_free_indx])
+            pi = self.occupancy.is_free1(x)
+            not_free_indx = np.where(pi == False)[0]
+
+            num_stuck += 1
+        return x
+
     def sample_motion_model(self, u, x_prev):
         """
         Samples the motion model based on odometry control. See Probabilistic Robotics, Table 5.6 pg 136
@@ -295,11 +344,38 @@ class MonteCarloLocalization:
 
         return np.array([xp, yp, tp])
 
-    def sample_normal(self, b):
+    def sample_motion_model1(self, u, x_prev):
+        """
+        Samples the motion model based on odometry control. See Probabilistic Robotics, Table 5.6 pg 136
+
+        Args:
+            u: The control via odometry, a 3x2 array where the first column is the (x,y,theta) of previous time step from
+                odometry and the second column is the (x,y,theta) of the current time step from odometry
+            x_prev: The previous pose of the robot, a 3x1 array (x, y, theta)
+        """
+        M = x_prev.shape[1]
+
+        delta_rot1 = np.arctan2(u[1, 1] - u[1, 0], u[0, 1] - u[0, 0]) - u[2, 0]
+        delta_trans = np.sqrt((u[0, 1] - u[0, 0]) ** 2 + (u[1, 1] - u[1, 0]) ** 2)
+        delta_rot2 = u[2, 1] - u[2, 0] - delta_rot1
+
+        delta_rot1_hat = delta_rot1 - self.sample_normal(self.alpha1 * np.abs(delta_rot1) + self.alpha2 * delta_trans, m=M)
+        delta_trans_hat = delta_trans - self.sample_normal(
+            self.alpha3 * delta_trans + self.alpha4 * (np.abs(delta_rot1) + np.abs(delta_rot2)), m=M)
+        delta_rot2_hat = delta_rot2 - self.sample_normal(self.alpha1 * np.abs(delta_rot2) + self.alpha2 * delta_trans, m=M)
+
+        xp = x_prev[0, :] + delta_trans_hat * np.cos(x_prev[2, :] + delta_rot1_hat)
+        yp = x_prev[1, :] + delta_trans_hat * np.sin(x_prev[2, :] + delta_rot1_hat)
+        tp = x_prev[2, :] + delta_rot1_hat + delta_rot2_hat
+        tp = self.wrap_theta(tp)
+
+        return np.vstack((xp, yp, tp))
+
+    def sample_normal(self, b, m=None):
         """
         Samples a value from a normal distribution with mean 0 and standard deviation b
         """
-        return np.random.normal(0, b)
+        return np.random.normal(0, b, size=m)
 
     def sample_triangular(self, b):
         """
@@ -426,19 +502,20 @@ class MonteCarloLocalization:
 
     def resample(self, w):
         """
-        Resamples the particles:
+        Resamples the particles: selects a new set of particles based on the weights
 
         Args:
             X: The particles: a 3xN array, where N = num_particles
             w: The weights: a 1xN array, where N = num_particles, and the sum of the weights is 1
         """
-        if np.sum(w) == 0:
-            w = np.ones(self.num_particles)/self.num_particles
-            print("Sum = 0")
-        else:
-            print("Sum neq 0")
-            w = w / np.sum(w)
+
+        # normalize the weights to get a probability distribution
+        w = w / np.sum(w)
+
+        # Resample the particles
         resample_indx = np.random.choice(np.arange(self.num_particles), size=self.num_particles, replace=True, p=w)
+
+        # Update the particles
         self.particles = self.particles[:, resample_indx]
 
     def estimate_pose(self):
@@ -476,16 +553,18 @@ class MonteCarloLocalization:
             marker.scale.x = 0.025
             marker.scale.y = 0.025
             marker.scale.z = 0.025
-            marker.color.a = 1.0
-            marker.color.r = 1.0
-            marker.color.g = 0.0
-            marker.color.b = 0.0
+            marker.color.a = 1.0  # Not transparent
+            marker.color.r = 1.0  # Red
+            marker.color.g = 0.0  # Green
+            marker.color.b = 0.0  # Blue
             particle_msg.markers.append(marker)
         self.particle_pub.publish(particle_msg)
 
     def run(self):
+        """
+        Runs the node
+        """
         rospy.spin()
-
 
     def shutdown(self):
         """
