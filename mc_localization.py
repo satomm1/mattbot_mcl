@@ -58,7 +58,7 @@ class MonteCarloLocalization:
         visualization in rviz.
     """
 
-    def __init__(self, num_particles=300, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.3, z_hit=0.75, z_random=0.25):
+    def __init__(self, num_particles=200, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.3, z_hit=0.75, z_random=0.25):
         """
         Initializes the Monte Carlo Localization node
         """
@@ -133,6 +133,7 @@ class MonteCarloLocalization:
             self.map_height = msg.height
             self.map_resolution = msg.resolution
             self.map_origin = (msg.origin.position.x, msg.origin.position.y)
+            print(msg.width, msg.height)
 
     def map_callback(self, msg):
         """
@@ -418,10 +419,10 @@ class MonteCarloLocalization:
             x_grid = np.round(x_meas / self.map_resolution).astype(int)
             y_grid = np.round(y_meas / self.map_resolution).astype(int)
 
-            if x_grid < 0 or x_grid >= self.map_height or y_grid < 0 or y_grid >= self.map_width:
+            if x_grid < 0 or x_grid >= self.map_width or y_grid < 0 or y_grid >= self.map_height:
                 p = 1/LIDAR_MAX_RANGE
             else:
-                p = self.prob_lookup_table[x_grid, y_grid]
+                p = self.prob_lookup_table[y_grid, x_grid]
             q *= p
         return q
 
@@ -448,15 +449,15 @@ class MonteCarloLocalization:
         y_grid = np.round(y_meas/self.map_resolution).astype(int)
 
         # Get indices of out of range locations
-        out_of_range_x = np.where((x_grid < 0) | (x_grid >= self.map_height))
-        out_of_range_y = np.where((y_grid < 0) | (y_grid >= self.map_width))
+        out_of_range_x = np.where((x_grid < 0) | (x_grid >= self.map_width))
+        out_of_range_y = np.where((y_grid < 0) | (y_grid >= self.map_height))
 
         # Clip the grid coordinates to be within the map
-        x_grid_norm = np.clip(x_grid, 0, self.map_height-1)
-        y_grid_norm = np.clip(y_grid, 0, self.map_width-1)
+        x_grid_norm = np.clip(x_grid, 0, self.map_width-1)
+        y_grid_norm = np.clip(y_grid, 0, self.map_height-1)
 
         # Look up the probabilities from the precomputed table
-        p = self.prob_lookup_table[x_grid_norm, y_grid_norm]
+        p = self.prob_lookup_table[y_grid_norm, x_grid_norm]
 
         # Set out of range locations to 1 / LIDAR_MAX_RANGE (these are unknown locations)
         p[out_of_range_x] = 1/LIDAR_MAX_RANGE
@@ -493,15 +494,15 @@ class MonteCarloLocalization:
         y_grid = np.round(y_meas / self.map_resolution).astype(int)
 
         # Get indices of out of range locations
-        out_of_range_x = np.where((x_grid < 0) | (x_grid >= self.map_height))
-        out_of_range_y = np.where((y_grid < 0) | (y_grid >= self.map_width))
+        out_of_range_x = np.where((x_grid < 0) | (x_grid >= self.map_width))
+        out_of_range_y = np.where((y_grid < 0) | (y_grid >= self.map_height))
 
         # Clip the grid coordinates to be within the map
-        x_grid_norm = np.clip(x_grid, 0, self.map_height - 1)
-        y_grid_norm = np.clip(y_grid, 0, self.map_width - 1)
+        x_grid_norm = np.clip(x_grid, 0, self.map_width - 1)
+        y_grid_norm = np.clip(y_grid, 0, self.map_height - 1)
 
         # Look up the probabilities from the precomputed table
-        p = self.prob_lookup_table[x_grid_norm, y_grid_norm]
+        p = self.prob_lookup_table[y_grid_norm, x_grid_norm]
 
         # Set out of range locations to 1 / LIDAR_MAX_RANGE (these are unknown locations)
         p[out_of_range_x[0], out_of_range_x[1]] = 1 / LIDAR_MAX_RANGE
