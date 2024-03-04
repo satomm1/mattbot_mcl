@@ -58,7 +58,7 @@ class MonteCarloLocalization:
         visualization in rviz.
     """
 
-    def __init__(self, num_particles=100, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.3, z_hit=0.75, z_random=0.25):
+    def __init__(self, num_particles=300, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.3, z_hit=0.75, z_random=0.25):
         """
         Initializes the Monte Carlo Localization node
         """
@@ -193,6 +193,9 @@ class MonteCarloLocalization:
 
                 # Only update particles if the odometry has changed
                 if not np.array_equal(self.prev_odom, self.odom):
+                    print(self.prev_odom)
+                    print(self.odom)
+                    print()
                     self.moving = True
 
                     # Update the particles based on the odometry data
@@ -207,8 +210,8 @@ class MonteCarloLocalization:
 
                     # Publish the particles for visualization
                     self.publish_particles()
-            else:
-                self.moving = False
+                else:
+                    self.moving = False
 
             # Store odometry data for next time
             self.prev_odom = self.odom

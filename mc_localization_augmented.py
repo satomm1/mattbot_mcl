@@ -214,8 +214,8 @@ class MonteCarloLocalization:
 
                     # Publish the particles for visualization
                     self.publish_particles()
-            else:
-                self.moving = False
+                else:
+                    self.moving = False
 
             # Store odometry data for next time
             self.prev_odom = self.odom
@@ -326,8 +326,8 @@ class MonteCarloLocalization:
         pi = 1
         num_stuck = 0
         not_free_indx = np.arange(x_prev.shape[1])
-        x = x_prev
-        while np.sum(pi) < x_prev.shape[1]:
+        x = np.copy(x_prev)
+        while len(not_free_indx) > 0:
             if num_stuck > 10:
                 x[: , not_free_indx] = x_prev[: , not_free_indx]
                 return x
@@ -335,9 +335,9 @@ class MonteCarloLocalization:
             x[:, not_free_indx] = self.sample_motion_model1(u, x_prev[:, not_free_indx])
             pi = self.occupancy.is_free1(x)
             not_free_indx = np.where(pi == False)[0]
-
             num_stuck += 1
         return x
+
 
     def sample_motion_model(self, u, x_prev):
         """
