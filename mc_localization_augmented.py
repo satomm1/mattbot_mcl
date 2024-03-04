@@ -534,11 +534,14 @@ class MonteCarloLocalization:
         # Resample the particles
         resample_indx = np.random.choice(np.arange(self.num_particles), size=self.num_particles, replace=True, p=w)
 
+        # Randomly inject new particles
         prob_random = np.maximum( 0 , 1 - self.w_fast/self.w_slow )
         random_indx = np.where(np.random.uniform(0, 1, self.num_particles) < prob_random)[0]
 
         # Update the particles
         self.particles = self.particles[:, resample_indx]
+
+        # Random particles
         for indx in random_indx:
             new_x = np.random.uniform(0, self.map_width*self.map_resolution-self.map_resolution)
             new_y = np.random.uniform(0, self.map_height*self.map_resolution-self.map_resolution)
