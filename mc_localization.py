@@ -74,6 +74,7 @@ class MonteCarloLocalization:
         self.pose = np.array([0, 0, 0])
         self.odom = None
         self.prev_odom = None
+        self.moving = False
 
         self.num_particles = num_particles
         self.prev_particles = None
@@ -192,6 +193,7 @@ class MonteCarloLocalization:
 
                 # Only update particles if the odometry has changed
                 if not np.array_equal(self.prev_odom, self.odom):
+                    self.moving = True
 
                     # Update the particles based on the odometry data
                     u = np.array([self.prev_odom, self.odom]).T
@@ -205,6 +207,8 @@ class MonteCarloLocalization:
 
                     # Publish the particles for visualization
                     self.publish_particles()
+            else:
+                self.moving = False
 
             # Store odometry data for next time
             self.prev_odom = self.odom
@@ -229,21 +233,25 @@ class MonteCarloLocalization:
         range_max = msg.range_max
 
         angles = np.arange(angle_min, angle_max, angle_increment)
-        indx_max = np.where(ranges > range_max)
-        indx_min = np.where(ranges < range_min)
+        # indx_max = np.where(ranges > range_max)
+        # indx_min = np.where(ranges < range_min)
+        valid_indx = np.where((ranges < range_max) & (ranges > range_min))
 
         # delete out of range values
-        ranges = np.delete(ranges, indx_max)
-        angles = np.delete(angles, indx_max)
-        ranges = np.delete(ranges, indx_min)
-        angles = np.delete(angles, indx_min)
+        # ranges = np.delete(ranges, indx_max)
+        # angles = np.delete(angles, indx_max)
+        # ranges = np.delete(ranges, indx_min)
+        # angles = np.delete(angles, indx_min)
+
+        ranges = ranges[valid_indx]
+        angles = angles[valid_indx]
 
         # delete nan values
-        nan_indx = np.where(np.isnan(ranges))
-        ranges = np.delete(ranges, nan_indx)
-        angles = np.delete(angles, nan_indx)
+        # nan_indx = np.where(np.isnan(ranges))
+        # ranges = np.delete(ranges, nan_indx)
+        # angles = np.delete(angles, nan_indx)
 
-        if self.have_map:
+        if self.have_map and self.moving:
             # w = np.zeros(self.num_particles)
             # for i in range(self.num_particles):
             #     # w[i] = self.measurement_model_loop(ranges, self.particles[:, i], angles)
