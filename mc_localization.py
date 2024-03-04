@@ -6,7 +6,7 @@ from nav_msgs.msg import OccupancyGrid, MapMetaData
 from visualization_msgs.msg import MarkerArray
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from visualization_msgs.msg import Marker
-import tf2_ros
+import tf
 from tf2_msgs.msg import TFMessage
 
 import numpy as np
@@ -86,7 +86,7 @@ class MonteCarloLocalization:
 
         self.mutex = Lock()
 
-        self.tf_listener = tf2_ros.TransformListener()
+        self.tf_listener = tf.TransformListener()
 
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_callback)
         self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback)
@@ -629,7 +629,7 @@ class MonteCarloLocalization:
                 self.pose = self.estimate_pose()
 
                 try:
-                    (trans, rot) = self.tf_listener.lookupTransform("odom", "base_footprint", rospy.Time())
+                    (trans, rot) = self.tf_listener.lookupTransform("/odom", "/base_footprint", rospy.Time(0))
                     x = trans[0]
                     y = trans[1]
                     _, _, theta = euler_from_quaternion(rot)
@@ -637,7 +637,7 @@ class MonteCarloLocalization:
                     print("x, y, theta: ", x, y, theta)
 
                     self.publish_map_odom_transform(x, y, theta)
-                except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+                except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
                     print("Failed to lookup transform from odom to base_footprint")
             rate.sleep()
 
