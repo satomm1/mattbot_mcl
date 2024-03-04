@@ -1,12 +1,13 @@
 import rospy
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import OccupancyGrid, MapMetaData
 from visualization_msgs.msg import MarkerArray
-from tf.transformations import euler_from_quaternion
+from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from visualization_msgs.msg import Marker
-import tf
+import tf2_ros
+from tf2_msgs.msg import TFMessage
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -85,14 +86,14 @@ class MonteCarloLocalization:
 
         self.mutex = Lock()
 
-        self.tf_listener = tf.TransformListener()
+        self.tf_listener = tf2_ros.TransformListener()
 
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_callback)
         self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback)
         self.map_sub = rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
         self.map_md_sub = rospy.Subscriber('/map_metadata', MapMetaData, self.map_md_callback)
 
-        self.pose_pub = rospy.Publisher('/pose', PoseStamped, queue_size=10)
+        self.tf_pub = rospy.Publisher("/tf", TFMessage, queue_size=10)
         self.particle_pub = rospy.Publisher('/particles', MarkerArray, queue_size=10)
 
         self.have_map = False
@@ -558,16 +559,39 @@ class MonteCarloLocalization:
         """
         return np.mean(self.particles, axis=1)
 
-    def publish_pose(self):
+    def publish_map_odom_transform(self, mo_x, mo_y, mo_theta):
         """
-        Publishes the estimated pose as a PoseStamped message
+        Publishes a transform between the map and odom frames
         """
-        pose_msg = PoseStamped()
-        pose_msg.header.stamp = rospy.Time.now()
-        pose_msg.pose.position.x = np.mean(self.particles[0, :])
-        pose_msg.pose.position.y = np.mean(self.particles[1, :])
-        pose_msg.pose.orientation.z = np.mean(self.particles[2, :])
-        self.pose_pub.publish(pose_msg)
+        # th1 = np.arctan2(self.pose[1], self.pose[0])
+
+        th2 = np.arctan2(mo_y, mo_x)
+        hyp = np.sqrt(mo_x**2 + mo_y**2)
+
+        new_x = hyp * np.cos(self.pose[2] + th2)
+        new_y = hyp * np.sin(self.pose[2] + th2)
+        new_th = self.pose[2] + mo_theta
+
+        # Create transform message
+        tf_msg = TFMessage()
+
+        transform = TransformStamped()
+        transform.header.stamp = rospy.Time.now()
+        transform.header.frame_id = "map"
+        transform.child_frame_id = "odom"
+        transform.transform.translation.x = new_x
+        transform.transform.translation.y = new_y
+        transform.transform.translation.z = 0.0
+
+        quat = quaternion_from_euler(0, 0, new_th)
+        transform.transform.rotation.x = quat[0]
+        transform.transform.rotation.y = quat[1]
+        transform.transform.rotation.z = quat[2]
+        transform.transform.rotation.w = quat[3]
+
+        # Publish transform
+        tf_msg.transforms.append(transform)
+        self.tf_pub.publish(tf_msg)
 
     def publish_particles(self):
         """
@@ -606,10 +630,14 @@ class MonteCarloLocalization:
 
                 try:
                     (trans, rot) = self.tf_listener.lookupTransform("odom", "base_footprint", rospy.Time())
+                    x = trans[0]
+                    y = trans[1]
+                    _, _, theta = euler_from_quaternion(rot)
                     print("Transform from odom to base_footprint:")
-                    print("Translation:", trans)
-                    print("Rotation:", rot)
-                except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+                    print("x, y, theta: ", x, y, theta)
+
+                    self.publish_map_odom_transform(x, y, theta)
+                except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
                     print("Failed to lookup transform from odom to base_footprint")
             rate.sleep()
 
