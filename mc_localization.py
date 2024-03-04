@@ -6,6 +6,7 @@ from nav_msgs.msg import OccupancyGrid, MapMetaData
 from visualization_msgs.msg import MarkerArray
 from tf.transformations import euler_from_quaternion
 from visualization_msgs.msg import Marker
+import tf
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -81,6 +82,8 @@ class MonteCarloLocalization:
         self.particles = None
 
         self.mutex = Lock()
+
+        self.tf_listener = tf.TransformListener()
 
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_callback)
         self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback)
@@ -533,7 +536,7 @@ class MonteCarloLocalization:
         """
         Estimates the robot's pose based on the particles and their weights
         """
-        pass
+        return np.mean(self.particles, axis=1)
 
     def publish_pose(self):
         """
@@ -575,7 +578,20 @@ class MonteCarloLocalization:
         """
         Runs the node
         """
-        rospy.spin()
+        # Run the node, every 0.5 seconds estimate the pose and publish it
+        rate = rospy.Rate(2)
+        while not rospy.is_shutdown():
+            if self.have_map:
+                self.pose = self.estimate_pose()
+
+                try:
+                    (trans, rot) = self.tf_listener.lookupTransform("odom", "base_footprint", rospy.Time())
+                    print("Transform from odom to base_footprint:")
+                    print("Translation:", trans)
+                    print("Rotation:", rot)
+                except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+                    print("Failed to lookup transform from odom to base_footprint")
+            rate.sleep()
 
     def shutdown(self):
         """
