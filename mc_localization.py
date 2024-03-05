@@ -559,18 +559,26 @@ class MonteCarloLocalization:
         """
         return np.mean(self.particles, axis=1)
 
-    def publish_map_odom_transform(self, mo_x, mo_y, mo_theta):
+    def publish_map_odom_transform(self, x_o_bf, y_o_bf, th_o_bf):
         """
         Publishes a transform between the map and odom frames
+
+        Args:
+            x_o_bf: The x position of the robot in the odom->base_footprint transform
+            y_o_bf: The y position of the robot in the odom->base_footprint transform
+            th_o_bf: The orientation of the robot in the odom->base_footprint transform
         """
-        # th1 = np.arctan2(self.pose[1], self.pose[0])
 
-        th2 = np.arctan2(mo_y, mo_x)
-        hyp = np.sqrt(mo_x**2 + mo_y**2)
+        th2 = np.arctan2(y_o_bf, x_o_bf)
+        h1 = np.sqrt(x_o_bf**2 + y_o_bf**2)
+        th1 = th2 + th_o_bf
 
-        new_x = hyp * np.cos(self.pose[2] + th2)
-        new_y = hyp * np.sin(self.pose[2] + th2)
-        new_th = self.pose[2] + mo_theta
+        x1 = h1 * np.cos(th1)
+        y1 = h1 * np.sin(th1)
+
+        x_m_o = self.pose[0] - x1
+        y_m_o = self.pose[1] - y1
+        th_m_o = self.pose[2] - th_o_bf
 
         # Create transform message
         tf_msg = TFMessage()
@@ -579,11 +587,11 @@ class MonteCarloLocalization:
         transform.header.stamp = rospy.Time.now()
         transform.header.frame_id = "map"
         transform.child_frame_id = "odom"
-        transform.transform.translation.x = self.pose[0] - new_x
-        transform.transform.translation.y = self.pose[1] - new_y
+        transform.transform.translation.x = x_m_o
+        transform.transform.translation.y = y_m_o
         transform.transform.translation.z = 0.0
 
-        quat = quaternion_from_euler(0, 0, self.pose[2] - mo_theta)
+        quat = quaternion_from_euler(0, 0, th_m_o)
         transform.transform.rotation.x = quat[0]
         transform.transform.rotation.y = quat[1]
         transform.transform.rotation.z = quat[2]
