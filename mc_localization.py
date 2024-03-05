@@ -61,7 +61,7 @@ class MonteCarloLocalization:
         visualization in rviz.
     """
 
-    def __init__(self, num_particles=300, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.3, z_hit=0.75, z_random=0.25):
+    def __init__(self, num_particles=300, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.2, z_hit=0.75, z_random=0.25):
         """
         Initializes the Monte Carlo Localization node
         """
@@ -212,17 +212,14 @@ class MonteCarloLocalization:
                         # for i in range(self.num_particles):
                         #     self.particles[:, i] = self.sample_motion_model_with_map(u, self.particles[:, i])
                         self.particles = self.sample_motion_model_with_map1(u, self.particles)
-                        print("Motion Model Update")
+                        # print("Motion Model Update")
 
-                    # Publish the particles for visualization
+                    # Publish the particles for visualization (only update periodically)
                     if self.pub_particle_indx == 30:
                         self.pub_particle_indx = 0
                         self.publish_particles()
                     self.pub_particle_indx += 1
-                    # self.publish_particles()
-                    
-                    t2 = time.time()
-                    print("Motion: ", t2-t1)
+
                 else:
                     self.moving = False
 
@@ -242,8 +239,6 @@ class MonteCarloLocalization:
         """
         
         self.mutex.acquire()
-        t1 = time.time()
-
 
         # Get the LIDAR measurements
         ranges = np.array(msg.ranges)
@@ -279,21 +274,15 @@ class MonteCarloLocalization:
             #     # w[i] = self.measurement_model_loop(ranges, self.particles[:, i], angles)
             #     w[i] = self.measurement_model1(ranges, self.particles[:, i], angles)
 
-            t3 = time.time()
             # Get particle weights based on measurements
             w = self.measurement_model2(ranges, self.particles, angles)
-            # print("Measurement Model Update")
-            t4 = time.time()
+
             # Resample the particles based on the weights
             self.resample(w)
 
             # Publish the particles for visualization
             # self.publish_particles()
 
-            t2 = time.time()
-            print("Measurement Total: ", t2-t1)
-            # print("Measurement Model: ", t4-t3)
-            # print("Measurement Resample: ", t2-t4)
         self.mutex.release()
 
     def init_particles(self):
@@ -506,12 +495,9 @@ class MonteCarloLocalization:
         # Tile the x array to match the number of measurements
         x_tiled = np.tile(x[:, :, np.newaxis], (1, 1, n))
 
-        # t1 = time.time()
         # Calculate the x and y coordinates of the measurements in the map frame
         x_meas = x_tiled[0, :, :] + z * np.cos(x_tiled[2, :, :] + theta_sens)
         y_meas = x_tiled[1, :, :] + z * np.sin(x_tiled[2, :, :] + theta_sens)
-        # t2 = time.time()
-        # print(t2 - t1)        
 
         # convert x_meas and y_meas to grid coordinates
         x_grid = np.round(x_meas / self.map_resolution).astype(int)
@@ -571,14 +557,11 @@ class MonteCarloLocalization:
 
         th2 = np.arctan2(y_o_bf, x_o_bf)
         h1 = np.sqrt(x_o_bf**2 + y_o_bf**2)
-        th1 = th2 + th_o_bf
 
-        x1 = h1 * np.cos(th1)
-        y1 = h1 * np.sin(th1)
-
-        x_m_o = self.pose[0] - x1
-        y_m_o = self.pose[1] - y1
         th_m_o = self.pose[2] - th_o_bf
+
+        x_m_o = self.pose[0] - h1 * np.cos(th2 + th_m_o)
+        y_m_o = self.pose[1] - h1 * np.sin(th2 + th_m_o)
 
         # Create transform message
         tf_msg = TFMessage()
@@ -641,8 +624,6 @@ class MonteCarloLocalization:
                     x = trans[0]
                     y = trans[1]
                     _, _, theta = euler_from_quaternion(rot)
-                    print("Transform from odom to base_footprint:")
-                    print("x, y, theta: ", x, y, theta)
 
                     self.publish_map_odom_transform(x, y, theta)
                 except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
