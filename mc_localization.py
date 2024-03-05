@@ -579,11 +579,11 @@ class MonteCarloLocalization:
         transform.header.stamp = rospy.Time.now()
         transform.header.frame_id = "map"
         transform.child_frame_id = "odom"
-        transform.transform.translation.x = new_x
-        transform.transform.translation.y = new_y
+        transform.transform.translation.x = self.pose[0] - new_x
+        transform.transform.translation.y = self.pose[1] - new_y
         transform.transform.translation.z = 0.0
 
-        quat = quaternion_from_euler(0, 0, new_th)
+        quat = quaternion_from_euler(0, 0, self.pose[2] - mo_theta)
         transform.transform.rotation.x = quat[0]
         transform.transform.rotation.y = quat[1]
         transform.transform.rotation.z = quat[2]
