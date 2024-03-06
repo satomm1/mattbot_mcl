@@ -696,6 +696,14 @@ class MonteCarloLocalization:
             if self.have_map:
                 self.pose = self.estimate_pose()
 
+                # If estimated pose is outside of map boundaries, reset particle filter:
+                if self.pose[0] < 0 or self.pose[0] > self.map_width*self.map_resolution or self.pose[1] < 0 or self.pose[1] > self.map_height*self.map_resolution:
+                    self.mutex.acquire()
+                    print("Resetting particles...")
+                    self.init_particles()
+                    print("Particles reset")
+                    self.mutex.release()
+
                 try:
                     # Get the transform from odom to base_footprint
                     (trans, rot) = self.tf_listener.lookupTransform("/odom", "/base_footprint", rospy.Time(0))
