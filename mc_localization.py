@@ -81,6 +81,7 @@ class MonteCarloLocalization:
         self.odom = None
         self.prev_odom = None
         self.moving = False
+        self.motion_updated = False
         self.updates_after_stopping = 0 # Number of measurment updates after the robot has stopped
 
         # Initialize the particles
@@ -221,6 +222,7 @@ class MonteCarloLocalization:
                 # Only update particles if the odometry has changed (i.e. the robot has moved)
                 if not np.array_equal(self.prev_odom, self.odom):
                     self.moving = True
+                    self.motion_updated = True
 
                     # Update the particles based on the odometry data
                     u = np.array([self.prev_odom, self.odom]).T  # The control array
@@ -276,7 +278,7 @@ class MonteCarloLocalization:
         angles = angles[valid_indx]
 
         # Only do measurement model update if there is a map and the robot is moving
-        if self.have_map and (self.moving or self.updates_after_stopping < 3):
+        if self.have_map and (self.moving or self.updates_after_stopping < 10) and self.motion_updated:
             # Get particle weights based on measurements
             w = self.measurement_model2(ranges, self.particles, angles)
 
