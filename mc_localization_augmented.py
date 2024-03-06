@@ -103,8 +103,12 @@ class MonteCarloLocalization:
         self.w_slow = 0
         self.w_fast = 0
         self.w_avg = 0
+
+        # These are the smoothing parameters for the exponential moving average of the average weight
+        # These should be between 0 and 1, Close to 1 means use only most recent values, close to 0 means use many of
+        # the previous values. We should have alpha_slow << alpha_fast
         self.alpha_slow = 0.01
-        self.alpha_fast = 1000
+        self.alpha_fast = 0.95
 
         # Create the subscribers
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_callback)
