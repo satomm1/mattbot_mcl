@@ -108,7 +108,7 @@ class MonteCarloLocalization:
         # These should be between 0 and 1, Close to 1 means use only most recent values, close to 0 means use many of
         # the previous values. We should have alpha_slow << alpha_fast
         self.alpha_slow = 0.01
-        self.alpha_fast = 0.95
+        self.alpha_fast = 0.5
 
         # Create the subscribers
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_callback)
@@ -625,7 +625,6 @@ class MonteCarloLocalization:
 
         # Randomly inject new particles
         prob_random = np.maximum( 0 , 1 - self.w_fast/self.w_slow )
-        print("Prob Random Particle: ", prob_random)
         random_indx = np.where(np.random.uniform(0, 1, self.num_particles) < prob_random)[0]
 
         # Update the particles
