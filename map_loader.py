@@ -199,6 +199,6 @@ class MapPublisher:
         pass
 
 if __name__ == '__main__':
-    map_file = 'map'
+    map_file = 'map_aligned'
     map_loader = MapPublisher(map_file)
     map_loader.run()
