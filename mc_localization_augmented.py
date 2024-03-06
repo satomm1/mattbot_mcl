@@ -1,16 +1,19 @@
 import rospy
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import OccupancyGrid, MapMetaData
 from visualization_msgs.msg import MarkerArray
-from tf.transformations import euler_from_quaternion
+from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from visualization_msgs.msg import Marker
+import tf
+from tf2_msgs.msg import TFMessage
 
 import numpy as np
 import matplotlib.pyplot as plt
 from threading import Thread, Lock
 from utils.grids import StochOccupancyGrid2D, DetOccupancyGrid2D
+import time
 
 SQRT6DIV2 = np.sqrt(6)/2
 LIDAR_MAX_RANGE = 16  # FIXME TO BE DETERMINED
@@ -58,7 +61,7 @@ class MonteCarloLocalization:
         visualization in rviz.
     """
 
-    def __init__(self, num_particles=200, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.3, z_hit=0.75, z_random=0.25):
+    def __init__(self, num_particles=300, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.3, z_hit=0.75, z_random=0.25):
         """
         Initializes the Monte Carlo Localization node
         """
@@ -79,8 +82,11 @@ class MonteCarloLocalization:
         self.num_particles = num_particles
         self.prev_particles = None
         self.particles = None
+        self.pub_particle_indx = 0
 
         self.mutex = Lock()
+
+        self.tf_listener = tf.TransformListener()
 
         # Parameters for random injection of particles
         self.w_slow = 0
@@ -94,7 +100,7 @@ class MonteCarloLocalization:
         self.map_sub = rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
         self.map_md_sub = rospy.Subscriber('/map_metadata', MapMetaData, self.map_md_callback)
 
-        self.pose_pub = rospy.Publisher('/pose', PoseStamped, queue_size=10)
+        self.tf_pub = rospy.Publisher("/tf", TFMessage, queue_size=10)
         self.particle_pub = rospy.Publisher('/particles', MarkerArray, queue_size=10)
 
         self.have_map = False
@@ -210,10 +216,14 @@ class MonteCarloLocalization:
                         # for i in range(self.num_particles):
                         #     self.particles[:, i] = self.sample_motion_model_with_map(u, self.particles[:, i])
                         self.particles = self.sample_motion_model_with_map1(u, self.particles)
-                        print("Motion Model Update")
+                        # print("Motion Model Update")
 
-                    # Publish the particles for visualization
-                    self.publish_particles()
+                    # Publish the particles for visualization (only update periodically)
+                    if self.pub_particle_indx == 30:
+                        self.pub_particle_indx = 0
+                        self.publish_particles()
+                    self.pub_particle_indx += 1
+
                 else:
                     self.moving = False
 
@@ -240,8 +250,9 @@ class MonteCarloLocalization:
         range_max = msg.range_max
 
         angles = np.arange(angle_min, angle_max, angle_increment)
-        # indx_max = np.where(ranges > range_max)
-        # indx_min = np.where(ranges < range_min)
+
+        ranges = ranges[::2]
+        angles = angles[::2]
         valid_indx = np.where((ranges < range_max) & (ranges > range_min))
 
         # delete out of range values
@@ -267,7 +278,7 @@ class MonteCarloLocalization:
             # Get particle weights based on measurements
             w = self.measurement_model2(ranges, self.particles, angles)
 
-            print("Measurement Model Update")
+            # print("Measurement Model Update")
 
             # Resample the particles based on the weights
             self.w_avg = np.mean(w)
@@ -276,7 +287,7 @@ class MonteCarloLocalization:
             self.resample(w)
 
             # Publish the particles for visualization
-            self.publish_particles()
+            # self.publish_particles()
 
         self.mutex.release()
 
@@ -290,15 +301,12 @@ class MonteCarloLocalization:
         theta = np.random.uniform(-np.pi, np.pi, self.num_particles)
         for i in range(self.num_particles):
             while not self.occupancy.is_free((x[i], y[i])) or self.occupancy.is_unknown((x[i], y[i])):
-                # print("Not free ", x[i], y[i])
                 x[i] = np.random.uniform(0, self.map_width*self.map_resolution-self.map_resolution)
                 y[i] = np.random.uniform(0, self.map_height*self.map_resolution-self.map_resolution)
             self.particles[0, i] = x[i]
             self.particles[1, i] = y[i]
             self.particles[2, i] = theta[i]
         self.publish_particles()
-        print(self.particles[:,0])
-        # print(self.particles)
 
     def sample_motion_model_with_map(self, u, x_prev):
         """
@@ -558,18 +566,46 @@ class MonteCarloLocalization:
         """
         Estimates the robot's pose based on the particles and their weights
         """
-        pass
+        return np.mean(self.particles, axis=1)
 
-    def publish_pose(self):
+    def publish_map_odom_transform(self, x_o_bf, y_o_bf, th_o_bf):
         """
-        Publishes the estimated pose as a PoseStamped message
+        Publishes a transform between the map and odom frames
+
+        Args:
+            x_o_bf: The x position of the robot in the odom->base_footprint transform
+            y_o_bf: The y position of the robot in the odom->base_footprint transform
+            th_o_bf: The orientation of the robot in the odom->base_footprint transform
         """
-        pose_msg = PoseStamped()
-        pose_msg.header.stamp = rospy.Time.now()
-        pose_msg.pose.position.x = np.mean(self.particles[0, :])
-        pose_msg.pose.position.y = np.mean(self.particles[1, :])
-        pose_msg.pose.orientation.z = np.mean(self.particles[2, :])
-        self.pose_pub.publish(pose_msg)
+
+        th2 = np.arctan2(y_o_bf, x_o_bf)
+        h1 = np.sqrt(x_o_bf**2 + y_o_bf**2)
+
+        th_m_o = self.pose[2] - th_o_bf
+
+        x_m_o = self.pose[0] - h1 * np.cos(th2 + th_m_o)
+        y_m_o = self.pose[1] - h1 * np.sin(th2 + th_m_o)
+
+        # Create transform message
+        tf_msg = TFMessage()
+
+        transform = TransformStamped()
+        transform.header.stamp = rospy.Time.now()
+        transform.header.frame_id = "map"
+        transform.child_frame_id = "odom"
+        transform.transform.translation.x = x_m_o
+        transform.transform.translation.y = y_m_o
+        transform.transform.translation.z = 0.0
+
+        quat = quaternion_from_euler(0, 0, th_m_o)
+        transform.transform.rotation.x = quat[0]
+        transform.transform.rotation.y = quat[1]
+        transform.transform.rotation.z = quat[2]
+        transform.transform.rotation.w = quat[3]
+
+        # Publish transform
+        tf_msg.transforms.append(transform)
+        self.tf_pub.publish(tf_msg)
 
     def publish_particles(self):
         """
@@ -600,7 +636,22 @@ class MonteCarloLocalization:
         """
         Runs the node
         """
-        rospy.spin()
+        # Run the node, every 0.5 seconds estimate the pose and publish it
+        rate = rospy.Rate(2)
+        while not rospy.is_shutdown():
+            if self.have_map:
+                self.pose = self.estimate_pose()
+
+                try:
+                    (trans, rot) = self.tf_listener.lookupTransform("/odom", "/base_footprint", rospy.Time(0))
+                    x = trans[0]
+                    y = trans[1]
+                    _, _, theta = euler_from_quaternion(rot)
+
+                    self.publish_map_odom_transform(x, y, theta)
+                except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+                    print("Failed to lookup transform from odom to base_footprint")
+            rate.sleep()
 
     def shutdown(self):
         """
