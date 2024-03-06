@@ -81,6 +81,7 @@ class MonteCarloLocalization:
         self.odom = None
         self.prev_odom = None
         self.moving = False
+        self.updates_after_stopping = 0 # Number of measurment updates after the robot has stopped
 
         # Initialize the particles
         self.num_particles = num_particles
@@ -275,12 +276,17 @@ class MonteCarloLocalization:
         angles = angles[valid_indx]
 
         # Only do measurement model update if there is a map and the robot is moving
-        if self.have_map and self.moving:
+        if self.have_map and (self.moving or self.updates_after_stopping < 3):
             # Get particle weights based on measurements
             w = self.measurement_model2(ranges, self.particles, angles)
 
             # Resample the particles based on the weights
             self.resample(w)
+
+            if not self.moving:
+                self.updates_after_stopping += 1
+            else:
+                self.updates_after_stopping = 0
 
         # Release the thread lock
         self.mutex.release()
