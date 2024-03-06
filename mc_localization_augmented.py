@@ -621,6 +621,7 @@ class MonteCarloLocalization:
 
         # Randomly inject new particles
         prob_random = np.maximum( 0 , 1 - self.w_fast/self.w_slow )
+        print("Prob Random Particle: ", prob_random)
         random_indx = np.where(np.random.uniform(0, 1, self.num_particles) < prob_random)[0]
 
         # Update the particles
@@ -755,7 +756,7 @@ class MonteCarloLocalization:
         rospy.sleep(1)
 
 if __name__ == '__main__':
-    
+
     mcl = MonteCarloLocalization()  # Initialize the Monte Carlo Localization node
     rospy.on_shutdown(mcl.shutdown)  # Define the shutdown function
     mcl.run()  # Run the node
