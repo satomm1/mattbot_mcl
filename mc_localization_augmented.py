@@ -61,7 +61,7 @@ class MonteCarloLocalization:
         visualization in rviz.
     """
 
-    def __init__(self, num_particles=300, alpha1=0.05, alpha2=0.05, alpha3=0.01, alpha4=0.001, sigma_hit=0.1,
+    def __init__(self, num_particles=300, alpha1=0.05, alpha2=0.05, alpha3=0.1, alpha4=0.001, sigma_hit=0.05,
                  z_hit=0.75, z_random=0.25, lidar_measurement_skip=2, visualize=False):
         """
         Initializes the Monte Carlo Localization node
