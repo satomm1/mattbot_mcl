@@ -621,7 +621,11 @@ class MonteCarloLocalization:
 
     def estimate_pose(self, w):
         """
-        Estimates the robot's pose based on the particles. Here, we take the mean of the particles as the estimated pose
+        Estimates the robot's pose based on the particles. Here, we take the weighted average of the particles as
+        the estimated pose
+
+        Args:
+            w: The weights: a 1xN array, where N = num_particles
 
         Returns:
             The estimated pose of the robot, a 3x1 array (x, y, theta)
