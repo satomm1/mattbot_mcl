@@ -611,6 +611,7 @@ class MonteCarloLocalization:
 
         # normalize the weights to get a probability distribution
         w = w / np.sum(w)
+        self.pose = self.estimate_pose(w)
 
         # Resample the particles using the weights
         resample_indx = np.random.choice(np.arange(self.num_particles), size=self.num_particles, replace=True, p=w)
@@ -618,14 +619,14 @@ class MonteCarloLocalization:
         # Update the particles based on the resampling
         self.particles = self.particles[:, resample_indx]
 
-    def estimate_pose(self):
+    def estimate_pose(self, w):
         """
         Estimates the robot's pose based on the particles. Here, we take the mean of the particles as the estimated pose
 
         Returns:
             The estimated pose of the robot, a 3x1 array (x, y, theta)
         """
-        return np.mean(self.particles, axis=1)
+        return np.average(self.particles, axis=1, weights=w)
 
     def publish_map_odom_transform(self, x_o_bf, y_o_bf, th_o_bf):
         """
@@ -702,8 +703,6 @@ class MonteCarloLocalization:
         rate = rospy.Rate(2)  # 2 Hz
         while not rospy.is_shutdown():
             if self.have_map:
-                self.pose = self.estimate_pose()
-
                 # If estimated pose is outside of map boundaries, reset particle filter:
                 if self.pose[0] < 0 or self.pose[0] > self.map_width*self.map_resolution or self.pose[1] < 0 or self.pose[1] > self.map_height*self.map_resolution:
                     self.mutex.acquire()
