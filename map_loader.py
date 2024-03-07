@@ -46,6 +46,7 @@ class MapPublisher:
             print("Loading Lookup Table...")
             self.dist_lookup_table = np.load('lookup_table/' + map_file + '.npy')
             np.save('lookup_table/mattbot_map', self.dist_lookup_table)
+            print("Lookup Table Loaded")
             # fig, ax = plt.subplots()
             # cbar = ax.imshow(self.dist_lookup_table, cmap='hot')
             # fig.colorbar(cbar)
@@ -102,6 +103,8 @@ class MapPublisher:
         map[unknown_loc] = -1
         map[free_loc] = 0
         map[occupied_loc] = 100
+        
+        map = np.flip(map, 1)
 
         flattened_map = map.flatten(order='C')  # Flatten to row-major order
 
