@@ -61,7 +61,7 @@ class MonteCarloLocalization:
         visualization in rviz.
     """
 
-    def __init__(self, num_particles=300, alpha1=0.05, alpha2=0.05, alpha3=0.1, alpha4=0.001, sigma_hit=0.05, z_hit=0.75, z_random=0.25, lidar_measurement_skip=2, visualize=False):
+    def __init__(self, num_particles=300, alpha1=0.05, alpha2=0.05, alpha3=0.1, alpha4=0.001, sigma_hit=0.01, z_hit=0.75, z_random=0.25, lidar_measurement_skip=2, visualize=False):
         """
         Initializes the Monte Carlo Localization node
         """
@@ -630,7 +630,12 @@ class MonteCarloLocalization:
         Returns:
             The estimated pose of the robot, a 3x1 array (x, y, theta)
         """
-        return np.average(self.particles, axis=1, weights=w)
+        ave_w = np.mean(w)
+        large_w_indx = np.where(w > 1.1*ave_w)[0]
+        if len(large_w_indx) == 0:
+            return np.mean(self.particles, axis=1)
+        else:
+            return np.average(self.particles[:, large_w_indx], axis=1, weights=w[large_w_indx])
 
     def publish_map_odom_transform(self, x_o_bf, y_o_bf, th_o_bf):
         """
@@ -704,7 +709,7 @@ class MonteCarloLocalization:
         Runs the node
         """
         # Run the node, every 0.5 seconds estimate the pose and publish it
-        rate = rospy.Rate(2)  # 2 Hz
+        rate = rospy.Rate(5)  # 2 Hz
         while not rospy.is_shutdown():
             if self.have_map:
                 # If estimated pose is outside of map boundaries, reset particle filter:
