@@ -737,7 +737,7 @@ class MonteCarloLocalization:
         Runs the node
         """
         # Run the node, every 0.5 seconds estimate the pose and publish it
-        rate = rospy.Rate(2)  # 2 Hz
+        rate = rospy.Rate(20)  # 20 Hz
         while not rospy.is_shutdown():
             if self.have_map:
                 # If estimated pose is outside of map boundaries, reset particle filter:
