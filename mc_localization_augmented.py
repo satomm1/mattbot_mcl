@@ -61,7 +61,7 @@ class MonteCarloLocalization:
         visualization in rviz.
     """
 
-    def __init__(self, num_particles=300, alpha1=0.05, alpha2=0.05, alpha3=0.1, alpha4=0.001, sigma_hit=0.05,
+    def __init__(self, num_particles=300, alpha1=0.01, alpha2=0.05, alpha3=0.1, alpha4=0.001, sigma_hit=0.01,
                  z_hit=0.75, z_random=0.25, lidar_measurement_skip=2, visualize=False):
         """
         Initializes the Monte Carlo Localization node
@@ -114,7 +114,7 @@ class MonteCarloLocalization:
 
         # Create the subscribers
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_callback)
-        self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback)
+        self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback, queue_size=1)
         self.map_sub = rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
         self.map_md_sub = rospy.Subscriber('/map_metadata', MapMetaData, self.map_md_callback)
 
@@ -299,6 +299,11 @@ class MonteCarloLocalization:
             self.w_slow += self.alpha_slow * (self.w_avg - self.w_slow)
             self.w_fast += self.alpha_fast * (self.w_avg - self.w_fast)
             self.resample(w)
+
+            if not self.moving:
+                self.updates_after_stopping += 1
+            else:
+                self.updates_after_stopping = 0
 
         # Release the thread lock
         self.mutex.release()
