@@ -101,7 +101,7 @@ class MonteCarloLocalization:
 
         # Create the subscribers
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_callback)
-        self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback)
+        self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback, queue_size=1)
         self.map_sub = rospy.Subscriber('/map', OccupancyGrid, self.map_callback)
         self.map_md_sub = rospy.Subscriber('/map_metadata', MapMetaData, self.map_md_callback)
 
