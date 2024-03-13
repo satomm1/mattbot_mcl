@@ -143,6 +143,10 @@ class MapPublisher:
             self.map_data,
         )
 
+        # Get the indices of every cell in the map that is occupied
+        probs = np.reshape(np.asarray(self.map_data), (self.map_height, self.map_width))
+        occupied_indices = np.where(probs == 100)
+        occupied_indices = np.vstack(occupied_indices)
 
         lookup_table = np.zeros((self.map_width, self.map_height))
         for x in range(self.map_width):
@@ -150,7 +154,8 @@ class MapPublisher:
                 if self.occupancy.is_unknown((x*self.map_resolution,y*self.map_resolution)):
                     lookup_table[x,y] = -1
                 elif self.occupancy.is_free((x*self.map_resolution,y*self.map_resolution)):
-                    lookup_table[x, y] = self.find_closest_obstacle(x, y)
+                    # lookup_table[x, y] = self.find_closest_obstacle(x, y)
+                    lookup_table[x, y] = np.min(np.linalg.norm(np.array([y, x]) - occupied_indices.T, axis=1)) * self.map_resolution
                 else:
                     lookup_table[x, y] = 0
         return lookup_table
@@ -195,7 +200,7 @@ class MapPublisher:
         """
         Runs the map loader node
         """
-        rate = rospy.Rate(1)
+        rate = rospy.Rate(0.5)  # 0.5 Hz
         while not rospy.is_shutdown():
             self.publish_map(self.map_data, self.map_metadata)
             rate.sleep()
