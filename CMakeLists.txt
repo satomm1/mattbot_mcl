@@ -186,6 +186,14 @@ catkin_install_python(PROGRAMS
 #   PATTERN ".svn" EXCLUDE
 # )
 
+install (DIRECTORY lookup_table/
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/lookup_table
+)
+
+install (DIRECTORY launch/
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
+)
+
 ## Mark other files for installation (e.g. launch and bag files, etc.)
 # install(FILES
 #   # myfile1

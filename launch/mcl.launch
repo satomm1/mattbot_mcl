@@ -1,0 +1,5 @@
+<launch>
+    <node name="mc_localization_node" pkg="mattbot_mcl" type="mc_localization.py" output="screen">
+        <!-- Add any necessary arguments or parameters here -->
+    </node>
+</launch>
