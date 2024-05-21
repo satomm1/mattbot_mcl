@@ -1,5 +1,6 @@
 import rospy
 import rospkg
+from std_msgs.msg import Bool
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseStamped, TransformStamped
@@ -145,7 +146,7 @@ class MonteCarloLocalization:
         visualization in rviz.
     """
 
-    def __init__(self, num_particles=300, alpha1=0.01, alpha2=0.05, alpha3=0.1, alpha4=0.001, sigma_hit=0.01, z_hit=0.75, z_random=0.25, lidar_measurement_skip=2, visualize=False):
+    def __init__(self, num_particles=200, alpha1=0.01, alpha2=0.05, alpha3=0.1, alpha4=0.001, sigma_hit=0.01, z_hit=0.75, z_random=0.25, lidar_measurement_skip=2, visualize=False):
         """
         Initializes the Monte Carlo Localization node
         """
@@ -174,6 +175,13 @@ class MonteCarloLocalization:
         self.particles = None
         self.pub_particle_indx = 0
 
+        # Internal variable to keep track if we think we have successfully localized
+        self.localized = False
+        self.localized_threshold = 12000000
+        self.w_mean_list = list()
+        self.num_updates_without_localization = 0
+        self.updates_allowed_without_localization = 300
+
         # Initialize the skip for the LIDAR measurements (i.e. 1 means we use every measurement, 2 means every other, etc.)
         self.lidar_measurement_skip = lidar_measurement_skip
 
@@ -192,6 +200,7 @@ class MonteCarloLocalization:
         # Create the publishers
         self.tf_pub = rospy.Publisher("/tf", TFMessage, queue_size=10)
         self.particle_pub = rospy.Publisher('/particles', MarkerArray, queue_size=10)
+        self.localized_pub = rospy.Publisher('/localized', Bool, queue_size=10)
 
         # Initialize the map variables
         self.have_map = False
@@ -369,6 +378,23 @@ class MonteCarloLocalization:
             # Get particle weights based on measurements
             w = self.measurement_model2(ranges, self.particles, angles)
 
+            ave_w = np.mean(w)
+            self.w_mean_list.append(ave_w)
+            if len(self.w_mean_list) > 10:
+                self.w_mean_list.pop(0)
+            moving_ave = np.mean(self.w_mean_list)
+
+            print(np.mean(w))
+            if self.localized:
+                pass
+            else:
+                if moving_ave > self.localized_threshold:
+                    self.localized = True
+                else:
+                    # If we don't localize after 300 updates, we should reset the particles
+                    # Keep track of how many updates we've done without localizing
+                    self.num_updates_without_localization += 1
+
             # Resample the particles based on the weights
             self.resample(w)
 
@@ -376,6 +402,14 @@ class MonteCarloLocalization:
                 self.updates_after_stopping += 1
             else:
                 self.updates_after_stopping = 0
+
+            if self.num_updates_without_localization > self.updates_allowed_without_localization:
+                # Reset the particles since we have localized to the wrong location
+                print("Resetting particles...")
+                self.init_particles()
+                print("Particles reset")
+
+                self.num_updates_without_localization = 0
 
         # Release the thread lock
         self.mutex.release()
@@ -695,7 +729,6 @@ class MonteCarloLocalization:
         Args:
             w: The weights: a 1xN array, where N = num_particles
         """
-
         # normalize the weights to get a probability distribution
         w = w / np.sum(w)
         self.pose = self.estimate_pose(w)
@@ -765,6 +798,9 @@ class MonteCarloLocalization:
         # Publish transform
         tf_msg.transforms.append(transform)
         self.tf_pub.publish(tf_msg)
+
+        # Also publish if we have localized
+        self.localized_pub.publish(self.localized)
 
     def publish_particles(self):
         """
