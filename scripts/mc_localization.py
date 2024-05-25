@@ -180,7 +180,7 @@ class MonteCarloLocalization:
         self.localized_threshold = 12000000
         self.w_mean_list = list()
         self.num_updates_without_localization = 0
-        self.updates_allowed_without_localization = 300
+        self.updates_allowed_without_localization = 100
 
         # Initialize the skip for the LIDAR measurements (i.e. 1 means we use every measurement, 2 means every other, etc.)
         self.lidar_measurement_skip = lidar_measurement_skip
