@@ -384,7 +384,7 @@ class MonteCarloLocalization:
                 self.w_mean_list.pop(0)
             moving_ave = np.mean(self.w_mean_list)
 
-            print(np.mean(w))
+            # print(np.mean(w))
             if self.localized:
                 pass
             else:
