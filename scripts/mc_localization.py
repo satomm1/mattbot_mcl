@@ -219,7 +219,7 @@ class MonteCarloLocalization:
         # This table will be the lookup table for the distance to the nearest obstacle
         rospack = rospkg.RosPack()
         pkg_path = rospack.get_path('mattbot_mcl')
-        data_path = pkg_path + '/lookup_table/mattbot_map.npy'
+        data_path = pkg_path + '/lookup_table/current_map.npy'
         self.dist_lookup_table = np.load(data_path)
         unknown_indx = np.where(self.dist_lookup_table == -1)
 
