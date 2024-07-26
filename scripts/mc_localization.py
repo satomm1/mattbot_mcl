@@ -359,7 +359,11 @@ class MonteCarloLocalization:
         angle_max = msg.angle_max
         angle_increment = msg.angle_increment
         range_min = msg.range_min
-        range_max = msg.range_max
+
+        if self.localized:
+            range_max = 2
+        else:
+            range_max = 10    
 
         # Get corresponding angles based on the message data
         angles = np.arange(angle_min, angle_max, angle_increment)
