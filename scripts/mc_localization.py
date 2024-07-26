@@ -389,6 +389,14 @@ class MonteCarloLocalization:
             # moving_ave = np.mean(self.w_mean_list)
 
             # print(np.mean(w))
+
+            # Get the top 10% of weights
+            top_10_percent = int(0.1 * len(w))
+            sorted_indices = np.argsort(w)
+            top_weights = w[sorted_indices[-top_10_percent:]]
+
+            # Calculate the average of the top 10% weights
+            average_top_weights = np.mean(top_weights)
             if self.localized:
                 pass
             else:
