@@ -382,17 +382,17 @@ class MonteCarloLocalization:
             # Get particle weights based on measurements
             w = self.measurement_model2(ranges, self.particles, angles)
 
-            ave_w = np.mean(w)
-            self.w_mean_list.append(ave_w)
-            if len(self.w_mean_list) > 10:
-                self.w_mean_list.pop(0)
-            moving_ave = np.mean(self.w_mean_list)
+            # ave_w = np.mean(w)
+            # self.w_mean_list.append(ave_w)
+            # if len(self.w_mean_list) > 10:
+            #     self.w_mean_list.pop(0)
+            # moving_ave = np.mean(self.w_mean_list)
 
             # print(np.mean(w))
             if self.localized:
                 pass
             else:
-                if moving_ave > self.localized_threshold:
+                if average_top_weights > self.localized_threshold:
                     self.localized = True
                 else:
                     # If we don't localize after 300 updates, we should reset the particles
