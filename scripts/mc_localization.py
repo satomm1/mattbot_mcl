@@ -764,10 +764,13 @@ class MonteCarloLocalization:
         """
         ave_w = np.mean(w)
         large_w_indx = np.where(w > 1.1*ave_w)[0]
-        if len(large_w_indx) == 0:
-            return np.mean(self.particles, axis=1)
-        else:
-            return np.average(self.particles[:, large_w_indx], axis=1, weights=w[large_w_indx])
+
+        max_w_indx = np.argmax(w)
+        return self.particles[:, max_w_indx]
+        # if len(large_w_indx) == 0:
+        #     return np.mean(self.particles, axis=1)
+        # else:
+        #     return np.average(self.particles[:, large_w_indx], axis=1, weights=w[large_w_indx])
 
     def publish_map_odom_transform(self, x_o_bf, y_o_bf, th_o_bf):
         """
