@@ -435,16 +435,20 @@ class MonteCarloLocalization:
         self.particles = np.zeros((3, self.num_particles))
 
         # Get first attempt at particles without considering where they are
-        x = np.random.uniform(0, self.map_width*self.map_resolution-self.map_resolution, self.num_particles)
-        y = np.random.uniform(0, self.map_height*self.map_resolution-self.map_resolution, self.num_particles)
+        # x = np.random.uniform(, self.map_width*self.map_resolution-self.map_resolution, self.num_particles)
+        x = np.random.uniform(7, 13, self.num_particles)
+        # y = np.random.uniform(0, self.map_height*self.map_resolution-self.map_resolution, self.num_particles)
+        y = np.random.uniform(98, self.map_height*self.map_resolution-self.map_resolution, self.num_particles)
         theta = np.random.uniform(-np.pi, np.pi, self.num_particles)
 
         # Now ensure the particles are in free space
         for i in range(self.num_particles):
             # Do not allow in unknown locations or occupied locations
             while not self.occupancy.is_free((x[i], y[i])) or self.occupancy.is_unknown((x[i], y[i])):
-                x[i] = np.random.uniform(0, self.map_width*self.map_resolution-self.map_resolution)
-                y[i] = np.random.uniform(0, self.map_height*self.map_resolution-self.map_resolution)
+                # x[i] = np.random.uniform(0, self.map_width*self.map_resolution-self.map_resolution)
+                x[i] = np.random.uniform(7, 13)
+                # y[i] = np.random.uniform(0, self.map_height*self.map_resolution-self.map_resolution)
+                y[i] = np.random.uniform(98, self.map_height*self.map_resolution-self.map_resolution)
 
             # Store the particle
             self.particles[0, i] = x[i]
