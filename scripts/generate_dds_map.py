@@ -74,11 +74,15 @@ class MapPreparer:
             map_data = yaml.safe_load(f)
 
         pgm_file = map_data['image']
+        pgm_mod_file = pgm_file.split('.')[0] + '_mod.pgm'
         resolution = map_data['resolution']
         origin = map_data['origin']
 
         with open('../maps/' + pgm_file, 'rb') as f:
             pgm_data = plt.imread(f)
+
+        with open('../maps/' + pgm_mod_file, 'rb') as f:
+            pgm_data_mod = plt.imread(f)
 
         # find range of values in pgm_data where value is not 205
         occupied_loc = np.where(pgm_data != 205)
@@ -91,6 +95,9 @@ class MapPreparer:
         map = pgm_data[min_x:max_x, min_y:max_y]
         map = np.array(map).astype(int)
 
+        mod_map = pgm_data_mod[min_x:max_x, min_y:max_y]
+        mod_map = np.array(mod_map).astype(int)
+
         # Convert to occupancy grid values
         unknown_loc = np.where(map == 205)
         free_loc = np.where(map == 254)
@@ -98,10 +105,17 @@ class MapPreparer:
         map[unknown_loc] = -1
         map[free_loc] = 0
         map[occupied_loc] = 100
-        
+
+        mod_loc = np.where(mod_map == 204)
+        mod_other_loc = np.where(mod_map != 204)
+        mod_map[mod_loc] = 100
+        mod_map[mod_other_loc] = -1
+
         map = np.flip(map, 1)
+        mod_map = np.flip(mod_map, 1)
 
         flattened_map = map.flatten(order='C')  # Flatten to row-major order
+        flattened_mod_map = mod_map.flatten(order='C')
 
         md_msg = MapMetaData()
         md_msg.resolution = resolution
@@ -129,8 +143,13 @@ class MapPreparer:
         map_dict['map']['resolution'] = md_msg.resolution
         map_dict['map']['occupancy'] = flattened_map.tolist()
 
+        mod_map_dict = map_dict.copy()
+        mod_map_dict['map']['occupancy'] = flattened_mod_map.tolist()
+
         data_dict = dict()
         data_dict['data'] = map_dict
+        mod_data_dict = dict()
+        mod_data_dict['data'] = mod_map_dict
 
         map_json = json.dumps(data_dict)
         with open('../map_json/' + map_file + '.json', 'w') as f:
@@ -138,6 +157,9 @@ class MapPreparer:
 
         with open('../map_json/current_map.json', 'w') as f:
             f.write(map_json)
+
+        with open('../map_json/current_map_mod.json', 'w') as f:
+            f.write(json.dumps(mod_data_dict))
 
         return flattened_map, md_msg
 

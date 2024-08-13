@@ -42,28 +42,28 @@ class MapPublisher:
         self.map_data, self.map_metadata = self.load_map(map_file)
         self.resolution = self.map_metadata.resolution
 
-        if os.path.exists('lookup_table/' + map_file + '.npy'):
-            print("Loading Lookup Table...")
-            self.dist_lookup_table = np.load('lookup_table/' + map_file + '.npy')
-            np.save('lookup_table/mattbot_map', self.dist_lookup_table)
-            print("Lookup Table Loaded")
-            # fig, ax = plt.subplots()
-            # cbar = ax.imshow(self.dist_lookup_table, cmap='hot')
-            # fig.colorbar(cbar)
-            # plt.show()
-        else:
-            print("Generating Lookup Table...")
-            self.dist_lookup_table =self.generate_dist_lookup_table()
-            self.dist_lookup_table = self.dist_lookup_table.T
-            print("Lookup Table Generated")
-            np.save('lookup_table/' + map_file, self.dist_lookup_table)
+        # if os.path.exists('lookup_table/' + map_file + '.npy'):
+        #     print("Loading Lookup Table...")
+        #     self.dist_lookup_table = np.load('lookup_table/' + map_file + '.npy')
+        #     np.save('lookup_table/mattbot_map', self.dist_lookup_table)
+        #     print("Lookup Table Loaded")
+        #     # fig, ax = plt.subplots()
+        #     # cbar = ax.imshow(self.dist_lookup_table, cmap='hot')
+        #     # fig.colorbar(cbar)
+        #     # plt.show()
+        # else:
+        #     print("Generating Lookup Table...")
+        #     self.dist_lookup_table =self.generate_dist_lookup_table()
+        #     self.dist_lookup_table = self.dist_lookup_table.T
+        #     print("Lookup Table Generated")
+        #     np.save('lookup_table/' + map_file, self.dist_lookup_table)
 
-            np.save('lookup_table/mattbot_map', self.dist_lookup_table)
+        #     np.save('lookup_table/mattbot_map', self.dist_lookup_table)
 
-            fig, ax = plt.subplots()
-            cbar = ax.imshow(self.dist_lookup_table, cmap='hot')
-            fig.colorbar(cbar)
-            plt.show()
+        #     fig, ax = plt.subplots()
+        #     cbar = ax.imshow(self.dist_lookup_table, cmap='hot')
+        #     fig.colorbar(cbar)
+        #     plt.show()
 
     def load_map(self, map_file):
         """
@@ -75,15 +75,21 @@ class MapPublisher:
         Returns:
             The map as a 2D occupancy grid
         """
-        with open('maps/' + map_file + '.yaml', 'r') as f:
+        with open('../maps/' + map_file + '.yaml', 'r') as f:
             map_data = yaml.safe_load(f)
 
         pgm_file = map_data['image']
         resolution = map_data['resolution']
         origin = map_data['origin']
 
-        with open('maps/' + pgm_file, 'rb') as f:
+        with open('../maps/' + pgm_file, 'rb') as f:
             pgm_data = plt.imread(f)
+
+        # Plot locations with pgm_data == 204
+        indx = np.where(pgm_data == 204)
+        plt.scatter(indx[1], indx[0], c='r', s=1)
+        plt.savefig("test3.png")
+
 
         # find range of values in pgm_data where value is not 205
         occupied_loc = np.where(pgm_data != 205)
@@ -100,9 +106,11 @@ class MapPublisher:
         unknown_loc = np.where(map == 205)
         free_loc = np.where(map == 254)
         occupied_loc = np.where(map == 0)
+        mod_loc = np.where(map == 204)
         map[unknown_loc] = -1
         map[free_loc] = 0
         map[occupied_loc] = 100
+        map[mod_loc] = 100
         
         map = np.flip(map, 1)
 
@@ -207,6 +215,6 @@ class MapPublisher:
         pass
 
 if __name__ == '__main__':
-    map_file = 'map_aligned'
+    map_file = 'fullmap5_mod'
     map_loader = MapPublisher(map_file)
     map_loader.run()
