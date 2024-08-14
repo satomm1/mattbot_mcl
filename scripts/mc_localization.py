@@ -271,7 +271,7 @@ class MonteCarloLocalization:
         """
 
         # If we've received the map metadata and have a way to update it:
-        if self.have_map is False and self.map_width is not None and self.map_height is not None and self.map_resolution is not 0:
+        if self.have_map is False and self.map_width is not None and self.map_height is not None and self.map_resolution != 0:
 
             # Create occupancy grid object
             self.occupancy = StochOccupancyGrid2D(
