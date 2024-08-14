@@ -143,13 +143,24 @@ class MapPreparer:
         map_dict['map']['resolution'] = md_msg.resolution
         map_dict['map']['occupancy'] = flattened_map.tolist()
 
-        mod_map_dict = map_dict.copy()
-        mod_map_dict['map']['occupancy'] = flattened_mod_map.tolist()
+        map_mod_dict = dict()
+        map_mod_dict['map'] = dict()
+        map_mod_dict['map']['width'] = md_msg.width
+        map_mod_dict['map']['height'] = md_msg.height
+        map_mod_dict['map']['origin_x'] = md_msg.origin.position.x
+        map_mod_dict['map']['origin_y'] = md_msg.origin.position.y
+        map_mod_dict['map']['origin_z'] = md_msg.origin.position.z
+        map_mod_dict['map']['origin_orientation_x'] = md_msg.origin.orientation.x
+        map_mod_dict['map']['origin_orientation_y'] = md_msg.origin.orientation.y
+        map_mod_dict['map']['origin_orientation_z'] = md_msg.origin.orientation.z
+        map_mod_dict['map']['origin_orientation_w'] = md_msg.origin.orientation.w
+        map_mod_dict['map']['resolution'] = md_msg.resolution
+        map_mod_dict['map']['occupancy'] = flattened_mod_map.tolist()
 
         data_dict = dict()
         data_dict['data'] = map_dict
         mod_data_dict = dict()
-        mod_data_dict['data'] = mod_map_dict
+        mod_data_dict['data'] = map_mod_dict
 
         map_json = json.dumps(data_dict)
         with open('../map_json/' + map_file + '.json', 'w') as f:
