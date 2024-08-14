@@ -182,6 +182,13 @@ class MonteCarloLocalization:
         self.num_updates_without_localization = 0
         self.updates_allowed_without_localization = 100
 
+        # Paramters for augmented MCL: injecting random particles
+        self.w_slow = 0
+        self.w_fast = 0
+        self.w_avg = 0
+        self.alpha_slow = rospy.get_param('alpha_slow', 0.01)
+        self.alpha_fast = rospy.get_param('alpha_fast', 0.9)
+
         # Initialize the skip for the LIDAR measurements (i.e. 1 means we use every measurement, 2 means every other, etc.)
         self.lidar_measurement_skip = lidar_measurement_skip
 
@@ -390,6 +397,13 @@ class MonteCarloLocalization:
 
             # print(np.mean(w))
 
+            self.w_avg = np.sum(w)
+            self.w_slow = self.w_slow + self.alpha_slow * (self.w_avg - self.w_slow)
+            self.w_fast = self.w_fast + self.alpha_fast * (self.w_avg - self.w_fast)
+
+            p_random = np.max([0.0, 1 - self.w_fast/self.w_slow])
+
+
             # Get the top 10% of weights
             top_10_percent = int(0.1 * len(w))
             sorted_indices = np.argsort(w)
@@ -408,7 +422,7 @@ class MonteCarloLocalization:
                     self.num_updates_without_localization += 1
 
             # Resample the particles based on the weights
-            self.resample(w)
+            self.resample(w, p_random=p_random)
 
             if not self.moving:
                 self.updates_after_stopping += 1
@@ -738,7 +752,7 @@ class MonteCarloLocalization:
         # Instead of doing product of all probabilities, we sum p^3 as a heuristic
         return np.sum(np.power(p, 3), axis=1)
 
-    def resample(self, w):
+    def resample(self, w, p_random=0):
         """
         Resamples the particles: selects a new set of particles based on the weights
 
@@ -754,6 +768,17 @@ class MonteCarloLocalization:
 
         # Update the particles based on the resampling
         self.particles = self.particles[:, resample_indx]
+
+        # Inject random particles
+        num_random_particles = int(p_random * self.num_particles)
+        if num_random_particles > 0:
+            # Determine indices of random particles
+            random_indx = np.random.choice(np.arange(self.num_particles), size=num_random_particles, replace=False)
+
+            # Set the random particles, centered about the estimated pose
+            random_particles = np.random.normal(self.pose, np.array([0.5,0.5,1]), size=(num_random_particles, 3))
+            self.particles[:, random_indx] = random_particles.T
+            # print("injected random particles")
 
     def estimate_pose(self, w):
         """
