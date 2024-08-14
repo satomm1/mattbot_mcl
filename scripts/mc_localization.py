@@ -368,7 +368,7 @@ class MonteCarloLocalization:
         range_min = msg.range_min
 
         if self.localized:
-            range_max = 2
+            range_max = 3
         else:
             range_max = 10    
 
@@ -381,6 +381,8 @@ class MonteCarloLocalization:
 
         # Only use measurements that are within valid range
         valid_indx = np.where((ranges < range_max) & (ranges > range_min))
+        if len(valid_indx[0]) < 200: 
+            valid_indx = np.where((ranges < range_max+3) & (ranges > 0.1))
         ranges = ranges[valid_indx]
         angles = angles[valid_indx]
 
