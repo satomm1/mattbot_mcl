@@ -382,7 +382,7 @@ class MonteCarloLocalization:
         # Only use measurements that are within valid range
         valid_indx = np.where((ranges < range_max) & (ranges > range_min))
         if len(valid_indx[0]) < 200: 
-            valid_indx = np.where((ranges < range_max+3) & (ranges > 0.1))
+            valid_indx = np.where((ranges < range_max+3) & (ranges > range_min))
         ranges = ranges[valid_indx]
         angles = angles[valid_indx]
 
