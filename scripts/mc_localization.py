@@ -332,11 +332,11 @@ class MonteCarloLocalization:
                     if self.particles is not None:
                         self.particles = self.sample_motion_model_with_map1(u, self.particles)  # Motion model update
 
-                    # Publish the particles for visualization (only update periodically)
-                    if self.pub_particle_indx == 30:
-                        self.pub_particle_indx = 0
-                        self.publish_particles()
-                    self.pub_particle_indx += 1
+                        # Publish the particles for visualization (only update periodically)
+                        if self.pub_particle_indx == 30:
+                            self.pub_particle_indx = 0
+                            self.publish_particles()
+                        self.pub_particle_indx += 1
 
                 else:
                     self.moving = False  # The robot hasn't moved
