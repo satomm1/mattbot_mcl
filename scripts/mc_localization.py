@@ -899,7 +899,7 @@ class MonteCarloLocalization:
                     # Publish the map->odom transform
                     self.publish_map_odom_transform(x, y, theta)
                 except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
-                    print("Failed to lookup transform from odom to base_footprint")
+                    print("MCL: Failed to lookup transform from odom to base_footprint")
             rate.sleep()
 
     def shutdown(self):
