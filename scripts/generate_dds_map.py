@@ -75,6 +75,7 @@ class MapPreparer:
 
         pgm_file = map_data['image']
         pgm_mod_file = pgm_file.split('.')[0] + '_mod.pgm'
+        pgm_occ_file = pgm_file.split('.')[0] + '_occ.pgm'
         resolution = map_data['resolution']
         origin = map_data['origin']
 
@@ -83,6 +84,7 @@ class MapPreparer:
 
         with open('../maps/' + pgm_mod_file, 'rb') as f:
             pgm_data_mod = plt.imread(f)
+
 
         # find range of values in pgm_data where value is not 205
         occupied_loc = np.where(pgm_data != 205)
@@ -110,6 +112,19 @@ class MapPreparer:
         mod_other_loc = np.where(mod_map != 204)
         mod_map[mod_loc] = 100
         mod_map[mod_other_loc] = -1
+
+        if os.path.exists('../maps/' + pgm_occ_file):
+            with open('../maps/' + pgm_occ_file, 'rb') as f:
+                pgm_data_occ = plt.imread(f)
+
+            occ_map = np.array(pgm_data_occ).astype(int)
+            occ_map = np.flip(occ_map, 1)
+            occ_map = np.flip(occ_map, 0)
+
+            occ_unknown_loc = np.where(occ_map == 205)
+            occ_free_loc = np.where(occ_map == 254)
+            occ_occupied_loc = np.where(occ_map == 0)
+            mod_map[occ_occupied_loc] = 100
 
         map = np.flip(map, 1)
         mod_map = np.flip(mod_map, 1)

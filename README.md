@@ -18,6 +18,8 @@ If you have a map that you want to use, follow these instructions:
 2) My code requires a second map where the user indicates "off limits" locations. To create this map, upload the .pgm file into GIMP, draw in black anywhere you want to add a new boundary. Save as a new .pgm file with the same map name with with '_mod' appended to the file name.
 3) Create an occupancy grid by running `python3 ./scripts/generate_dds_map.py`.
 
+If you have an occupancy grid map you want to add, simply use the same name convention but with a '_occ' appended to the .pgm file name.
+
 **Author**: Matthew Sato, Engineering Informatics Lab, Stanford University
 
 **License**: This package is released under the [MIT license](LICENSE).
