@@ -8,6 +8,9 @@ This package implements monte carlo (particle filter) localization (MCL) for the
 - **mc_localization_kld.py**: Implements Monte Carlo Localization with particle sampling based on KL Divergence (not fully implemented)
 - **map_loader.py**: Loads a map and publishes it to the map topic
 
+> [!IMPORTANT]
+> Right now, you must edit the `init_particles()` function in `mc_localization.py` to set coordinates close to the starting point of the mobile robot. Eventually, we will automate this process to make this easier.
+
 ## Map Generation
 To use a map for localization, follow these instructions:
 
