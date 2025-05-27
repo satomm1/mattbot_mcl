@@ -146,20 +146,18 @@ class MonteCarloLocalization:
         visualization in rviz.
     """
 
-    def __init__(self, num_particles=200, alpha1=0.02, alpha2=0.1, alpha3=0.2, alpha4=0.02, sigma_hit=0.01, z_hit=0.75, z_random=0.25, lidar_measurement_skip=2, visualize=False):
+    def __init__(self, visualize=False):
         """
         Initializes the Monte Carlo Localization node
         """
-        # TODO, eventually change function inputs to be ROS parameters
-
-        # Parameters for the motion model
-        self.alpha1 = alpha1
-        self.alpha2 = alpha2
-        self.alpha3 = alpha3
-        self.alpha4 = alpha4
-
         # Initialize the node
         rospy.init_node('monte_carlo_localization')
+
+        # Parameters for the motion model
+        self.alpha1 = rospy.get_param('~alpha1', 0.02)
+        self.alpha2 = rospy.get_param('~alpha2', 0.1)
+        self.alpha3 = rospy.get_param('~alpha3', 0.2)
+        self.alpha4 = rospy.get_param('~alpha4', 0.02)
 
         # Initialize the pose and other variables needed
         self.pose = np.array([0, 0, 0])
@@ -170,7 +168,7 @@ class MonteCarloLocalization:
         self.updates_after_stopping = 0 # Number of measurment updates after the robot has stopped
 
         # Initialize the particles
-        self.num_particles = num_particles
+        self.num_particles = rospy.get_param('~num_particles', 200)
         self.prev_particles = None
         self.particles = None
         self.pub_particle_indx = 0
@@ -186,11 +184,11 @@ class MonteCarloLocalization:
         self.w_slow = 0
         self.w_fast = 0
         self.w_avg = 0
-        self.alpha_slow = rospy.get_param('alpha_slow', 0.01)
-        self.alpha_fast = rospy.get_param('alpha_fast', 0.9)
+        self.alpha_slow = rospy.get_param('~alpha_slow', 0.01)
+        self.alpha_fast = rospy.get_param('~alpha_fast', 0.9)
 
         # Initialize the skip for the LIDAR measurements (i.e. 1 means we use every measurement, 2 means every other, etc.)
-        self.lidar_measurement_skip = lidar_measurement_skip
+        self.lidar_measurement_skip = rospy.get_param('~lidar_measurement_skip', 2)
 
         # Initialize the mutex needed for thread safety
         self.mutex = Lock()
@@ -218,9 +216,9 @@ class MonteCarloLocalization:
         self.map_origin = None
 
         # The parameters for the mixing model of probabilities. z_hit + z_random = 1. These weight the probabilities
-        self.z_hit = z_hit
-        self.sigma_hit = sigma_hit  # standard deviation of the Gaussian
-        self.z_random = z_random
+        self.z_hit = rospy.get_param('~z_hit', 0.75)
+        self.sigma_hit = rospy.get_param('~sigma_hit', 0.01)  # standard deviation of the Gaussian
+        self.z_random = rospy.get_param('~z_random', 0.25)
         assert self.z_hit + self.z_random == 1, "z_hit + z_random must equal 1"
 
         # This table will be the lookup table for the distance to the nearest obstacle

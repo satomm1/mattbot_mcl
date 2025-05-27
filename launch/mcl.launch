@@ -1,5 +1,24 @@
 <launch>
+    <arg name="num_particles" default="200" />
+    <arg name="lidar_measurement_skip" default="2" />
+    <arg name="z_hit" default="0.75" />
+    <arg name="z_random" default="0.25" />
+    <arg name="sigma_hit" default="0.01" />
+    <arg name="alpha1" default="0.02" />
+    <arg name="alpha2" default="0.1" />
+    <arg name="alpha3" default="0.2" />
+    <arg name="alpha4" default="0.02" />
+    
     <node name="mc_localization_node" pkg="mattbot_mcl" type="mc_localization.py" output="screen">
-        <!-- Add any necessary arguments or parameters here -->
+        <!-- Pass the argument as a parameter to the node -->
+        <param name="num_particles" value="$(arg num_particles)" />
+        <param name="lidar_measurement_skip" value="$(arg lidar_measurement_skip)" />
+        <param name="z_hit" value="$(arg z_hit)" />
+        <param name="z_random" value="$(arg z_random)" />
+        <param name="sigma_hit" value="$(arg sigma_hit)" />
+        <param name="alpha1" value="$(arg alpha1)" />
+        <param name="alpha2" value="$(arg alpha2)" />
+        <param name="alpha3" value="$(arg alpha3)" />
+        <param name="alpha4" value="$(arg alpha4)" />
     </node>
 </launch>
