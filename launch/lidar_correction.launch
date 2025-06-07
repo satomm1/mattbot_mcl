@@ -1,0 +1,11 @@
+<launch>
+
+  <!-- Specify the package name -->
+  <arg name="package" default="mattbot_mcl"/>
+
+  <!-- Launch a node from the package -->
+  <node pkg="$(arg package)" type="lidar_correction.py" name="lidar_correction" output="screen">
+    <!-- Add any additional node-specific parameters here -->
+  </node>
+
+</launch>
