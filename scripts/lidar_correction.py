@@ -16,8 +16,12 @@ class LiDAR_MAP:
         self.pitch = 0.0
         self.roll_pitch_subscriber = rospy.Subscriber('/imu/roll_pitch', Quaternion, self.roll_pitch_callback)
 
-        self.scan_publisher = rospy.Publisher('/scan_corrected', LaserScan, queue_size=10)
-        self.scan_subscriber = rospy.Subscriber('/scan', LaserScan, self.scan_callback, queue_size=1)
+        # Get rosparameters scan_input and scan_output
+        self.scan_input = rospy.get_param('~scan_input', '/scan')
+        self.scan_output = rospy.get_param('~scan_output', '/scan_corrected')
+
+        self.scan_publisher = rospy.Publisher(self.scan_output, LaserScan, queue_size=10)
+        self.scan_subscriber = rospy.Subscriber(self.scan_input, LaserScan, self.scan_callback, queue_size=1)
 
 
         # Initialize static transform broadcaster

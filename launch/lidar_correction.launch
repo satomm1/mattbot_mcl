@@ -3,9 +3,14 @@
   <!-- Specify the package name -->
   <arg name="package" default="mattbot_mcl"/>
 
+  <arg name="scan_input" default="/scan"/>
+  <arg name="scan_output" default="/scan_corrected"/>
+
   <!-- Launch a node from the package -->
   <node pkg="$(arg package)" type="lidar_correction.py" name="lidar_correction" output="screen">
     <!-- Add any additional node-specific parameters here -->
+    <param name="scan_input" value="$(arg scan_input)"/>
+    <param name="scan_output" value="$(arg scan_output)"/>
   </node>
 
 </launch>
