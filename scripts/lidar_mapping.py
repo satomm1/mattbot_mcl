@@ -8,14 +8,14 @@ import numpy as np
 class LiDAR_MAP:
 
     def __init__(self):
-        rospy.init_node('lidar_mapping', anonymous=True)
+        rospy.init_node('lidar_correction', anonymous=True)
         
         self.roll = 0.0
         self.pitch = 0.0
         self.roll_pitch_subscriber = rospy.Subscriber('/imu/roll_pitch', Quaternion, self.roll_pitch_callback)
 
         self.scan_publisher = rospy.Publisher('/scan_corrected', LaserScan, queue_size=10)
-        self.scan_subscriber = rospy.Subscriber('/scan', LaserScan, self.scan_callback)
+        self.scan_subscriber = rospy.Subscriber('/scan', LaserScan, self.scan_callback, queue_size=1)
 
     def run(self):
         rospy.spin()
@@ -32,18 +32,55 @@ class LiDAR_MAP:
     def scan_callback(self, scan_data):
         # Process the scan data and publish it
         # Here you can implement your mapping logic
-        self.scan_publisher.publish(scan_data)
-        rospy.loginfo("Published scan data to /lidar_map")
 
-        scan_depths = np.array(scan_data.ranges)
+        scan_ranges = np.array(scan_data.ranges)
         
         angle_min = scan_data.angle_min
         angle_increment = scan_data.angle_increment
         angle_max = scan_data.angle_max
         scan_angles = np.arange(angle_min, angle_max, angle_increment)
 
-        # Correct the scan data based on roll and pitch
-        corrected_depths = scan_depths * np.cos(self.roll) * np.cos(self.pitch)
+        # 1. Convert polar to Cartesian coordinates
+        points = np.vstack([
+            scan_ranges * np.cos(scan_angles),  # x
+            scan_ranges * np.sin(scan_angles),  # y
+            np.zeros_like(scan_ranges)          # z
+        ])
+
+        # 2. Create combined rotation matrix (roll then pitch)
+        cp, sp = np.cos(self.pitch), np.sin(self.pitch)
+        cr, sr = np.cos(self.roll), np.sin(self.roll)
+        
+        # Inverse (transpose) or R_pitch * R_roll rotation matrices
+        rotation_matrix = np.array([
+            [cp,          0,     -sp],
+            [sr*sp,       cr,   sr*cp],
+            [cr*sp,      -sr,   cr*cp]
+        ])
+
+        # 3. Apply the rotation to the scan data
+        rotated_points = rotation_matrix @ points
+
+        # 4. Project to z=0 plane
+        projected_points = rotated_points[:2, :]
+        corrected_ranges = np.linalg.norm(projected_points, axis=0)
+        corrected_angles = scan_angles
+
+        # 5. Create a new LaserScan message
+        corrected_scan = LaserScan()
+        corrected_scan.header = scan_data.header
+        corrected_scan.angle_min = angle_min
+        corrected_scan.angle_max = angle_max    
+        corrected_scan.angle_increment = angle_increment
+        corrected_scan.time_increment = scan_data.time_increment
+        corrected_scan.range_min = scan_data.range_min
+        corrected_scan.range_max = scan_data.range_max
+        corrected_scan.ranges = corrected_ranges.tolist()
+        corrected_scan.intensities = scan_data.intensities
+
+        # 6. Publish the corrected scan
+        self.scan_publisher.publish(corrected_scan)
+        
 
 if __name__ == '__main__':
     try:
