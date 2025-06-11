@@ -23,39 +23,8 @@ class LiDAR_MAP:
         self.scan_publisher = rospy.Publisher(self.scan_output, LaserScan, queue_size=10)
         self.scan_subscriber = rospy.Subscriber(self.scan_input, LaserScan, self.scan_callback, queue_size=1)
 
-
-        # Initialize static transform broadcaster
-        self.tf_broadcaster = rospy.Publisher('/tf_static', TFMessage, queue_size=10)
-
-        # Create a static transform from map to odom
-        self.map_to_odom = TransformStamped()
-        self.map_to_odom.header.frame_id = "map"
-        self.map_to_odom.child_frame_id = "odom"
-        self.map_to_odom.transform.translation.x = 0.0
-        self.map_to_odom.transform.translation.y = 0.0
-        self.map_to_odom.transform.translation.z = 0.0
-        self.map_to_odom.transform.rotation.x = 0.0
-        self.map_to_odom.transform.rotation.y = 0.0
-        self.map_to_odom.transform.rotation.z = 0.0
-        self.map_to_odom.transform.rotation.w = 1.0
-
-        # Publish the static transform once
-        tf_msg = TFMessage([self.map_to_odom])
-        self.tf_broadcaster.publish(tf_msg)
-
-        # Set up a timer to periodically publish the transform
-        self.tf_timer = rospy.Timer(rospy.Duration(1.0), self.publish_tf)
-
     def run(self):
         rospy.spin()
-
-    def publish_tf(self, event):
-        # Update the timestamp for the transform
-        self.map_to_odom.header.stamp = rospy.Time.now()
-        
-        # Publish the static transform
-        tf_msg = TFMessage([self.map_to_odom])
-        self.tf_broadcaster.publish(tf_msg)
 
     def roll_pitch_callback(self, roll_pitch_data):
         # Convert Quaternion to roll and pitch
