@@ -801,23 +801,23 @@ class MonteCarloLocalization:
         # else:
         #     return np.average(self.particles[:, large_w_indx], axis=1, weights=w[large_w_indx])
 
-    def publish_map_odom_transform(self, x_o_bf, y_o_bf, th_o_bf):
+    def publish_map_odom_transform(self, x_o_lf, y_o_lf, th_o_lf):
         """
         Publishes a transform between the map and odom frames. Calculates the map->odom transform based on the current
-        estimated pose of the robot and the current odom->base_footprint transform. This transform is published as a
+        estimated pose of the robot and the current odom->laser_frame transform. This transform is published as a
         TFMessage.
 
         Args:
-            x_o_bf: The x position of the robot in the odom->base_footprint transform
-            y_o_bf: The y position of the robot in the odom->base_footprint transform
-            th_o_bf: The orientation of the robot in the odom->base_footprint transform
+            x_o_lf: The x position of the robot in the odom->laser_frame transform
+            y_o_lf: The y position of the robot in the odom->laser_frame transform
+            th_o_lf: The orientation of the robot in the odom->laser_frame transform
         """
         # Calculate the map->odom transform based on the current estimated pose of the robot and the current
-        # odom->base_footprint transform, see figures/transform_geometry.png for details
-        th2 = np.arctan2(y_o_bf, x_o_bf)
-        h1 = np.sqrt(x_o_bf**2 + y_o_bf**2)
+        # odom->laser_frame transform, see figures/transform_geometry.png for details
+        th2 = np.arctan2(y_o_lf, x_o_lf)
+        h1 = np.sqrt(x_o_lf**2 + y_o_lf**2)
 
-        th_m_o = self.pose[2] - th_o_bf
+        th_m_o = self.pose[2] - th_o_lf
 
         x_m_o = self.pose[0] - h1 * np.cos(th2 + th_m_o)
         y_m_o = self.pose[1] - h1 * np.sin(th2 + th_m_o)
@@ -888,8 +888,8 @@ class MonteCarloLocalization:
                     self.mutex.release()
 
                 try:
-                    # Get the transform from odom to base_footprint
-                    (trans, rot) = self.tf_listener.lookupTransform("/odom", "/base_footprint", rospy.Time(0))
+                    # Get the transform from odom to laser_frame
+                    (trans, rot) = self.tf_listener.lookupTransform("/odom", "/laser_frame", rospy.Time(0))
                     x = trans[0]
                     y = trans[1]
                     _, _, theta = euler_from_quaternion(rot)
@@ -897,7 +897,7 @@ class MonteCarloLocalization:
                     # Publish the map->odom transform
                     self.publish_map_odom_transform(x, y, theta)
                 except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
-                    print("MCL: Failed to lookup transform from odom to base_footprint")
+                    print("MCL: Failed to lookup transform from odom to laser_frame")
             rate.sleep()
 
     def shutdown(self):
