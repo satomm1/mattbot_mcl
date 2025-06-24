@@ -175,7 +175,7 @@ class MonteCarloLocalization:
 
         # Internal variable to keep track if we think we have successfully localized
         self.localized = False
-        self.localized_threshold = 12000000
+        self.localized_threshold = 10000000
         self.w_mean_list = list()
         self.num_updates_without_localization = 0
         self.updates_allowed_without_localization = 100
