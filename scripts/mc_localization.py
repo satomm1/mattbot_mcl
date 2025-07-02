@@ -154,10 +154,15 @@ class MonteCarloLocalization:
         rospy.init_node('monte_carlo_localization')
 
         # Parameters for the motion model
-        self.alpha1 = rospy.get_param('~alpha1', 0.02)
+        self.alpha1 = rospy.get_param('~alpha1', 0.002)  # 
         self.alpha2 = rospy.get_param('~alpha2', 0.1)
         self.alpha3 = rospy.get_param('~alpha3', 0.2)
-        self.alpha4 = rospy.get_param('~alpha4', 0.02)
+        self.alpha4 = rospy.get_param('~alpha4', 0.002)
+
+        self.alpha1_localized = rospy.get_param('~alpha1_localized', 0.002) 
+        self.alpha2_localized = rospy.get_param('~alpha2_localized', 0.005)
+        self.alpha3_localized = rospy.get_param('~alpha3_localized', 0.005)
+        self.alpha4_localized = rospy.get_param('~alpha4_localized', 0.002)
 
         # Initialize the pose and other variables needed
         self.pose = np.array([0, 0, 0])
@@ -878,6 +883,13 @@ class MonteCarloLocalization:
         # Run the node, every 0.5 seconds estimate the pose and publish it
         rate = rospy.Rate(20)  # 2 Hz
         while not rospy.is_shutdown():
+
+            if self.localized:
+                self.alpha1 = self.alpha1_localized
+                self.alpha2 = self.alpha2_localized
+                self.alpha3 = self.alpha3_localized
+                self.alpha4 = self.alpha4_localized
+
             if self.have_map:
                 # If estimated pose is outside of map boundaries, reset particle filter:
                 if self.pose[0] < 0 or self.pose[0] > self.map_width*self.map_resolution or self.pose[1] < 0 or self.pose[1] > self.map_height*self.map_resolution:

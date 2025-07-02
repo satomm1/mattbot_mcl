@@ -4,10 +4,10 @@
     <arg name="z_hit" default="0.75" />
     <arg name="z_random" default="0.25" />
     <arg name="sigma_hit" default="0.01" />
-    <arg name="alpha1" default="0.02" />
+    <arg name="alpha1" default="0.002" />
     <arg name="alpha2" default="0.1" />
     <arg name="alpha3" default="0.2" />
-    <arg name="alpha4" default="0.02" />
+    <arg name="alpha4" default="0.002" />
     
     <node name="mc_localization_node" pkg="mattbot_mcl" type="mc_localization.py" output="screen">
         <!-- Pass the argument as a parameter to the node -->
