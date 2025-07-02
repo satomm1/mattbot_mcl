@@ -5,7 +5,7 @@
     <arg name="z_random" default="0.25" />
     <arg name="sigma_hit" default="0.01" />
     <arg name="alpha1" default="0.002" />
-    <arg name="alpha2" default="0.1" />
+    <arg name="alpha2" default="0.2" />
     <arg name="alpha3" default="0.2" />
     <arg name="alpha4" default="0.002" />
     

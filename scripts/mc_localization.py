@@ -552,9 +552,13 @@ class MonteCarloLocalization:
         delta_trans = np.sqrt((u[0, 1] - u[0, 0])**2 + (u[1, 1] - u[1, 0])**2)
         delta_rot2 = u[2, 1] - u[2, 0] - delta_rot1
 
-        delta_rot1_hat = delta_rot1 - self.sample_normal(self.alpha1*np.abs(delta_rot1) + self.alpha2*delta_trans)
-        delta_trans_hat = delta_trans - self.sample_normal(self.alpha3*delta_trans + self.alpha4*(np.abs(delta_rot1) + np.abs(delta_rot2)))
-        delta_rot2_hat = delta_rot2 - self.sample_normal(self.alpha1*np.abs(delta_rot2) + self.alpha2*delta_trans)
+        # Treat backwards and forwards motion symettrically for noise model:
+        delta_rot1_noise = np.min([np.abs(self.angle_diff(delta_rot1, 0)), np.abs(self.angle_diff(delta_rot1, np.pi))])
+        delta_rot2_noise = np.min([np.abs(self.angle_diff(delta_rot2, 0)), np.abs(self.angle_diff(delta_rot2, np.pi))])
+
+        delta_rot1_hat = delta_rot1 - self.sample_normal(self.alpha1*np.abs(delta_rot1_noise) + self.alpha2*delta_trans)
+        delta_trans_hat = delta_trans - self.sample_normal(self.alpha3*delta_trans + self.alpha4*(np.abs(delta_rot1_noise) + np.abs(delta_rot2_noise)))
+        delta_rot2_hat = delta_rot2 - self.sample_normal(self.alpha1*np.abs(delta_rot2_noise) + self.alpha2*delta_trans)
 
         xp = x_prev[0] + delta_trans_hat * np.cos(x_prev[2] + delta_rot1_hat)
         yp = x_prev[1] + delta_trans_hat * np.sin(x_prev[2] + delta_rot1_hat)
@@ -579,16 +583,21 @@ class MonteCarloLocalization:
         M = x_prev.shape[1]  # Number of particles
 
         # Implements the odometry sampling model, see Probabilistic Robotics for details
-        delta_rot1 = np.arctan2(u[1, 1] - u[1, 0], u[0, 1] - u[0, 0]) - u[2, 0]
+        if np.sqrt((u[0, 1] - u[0, 0]) ** 2 + (u[1, 1] - u[1, 0]) ** 2) < 0.01: 
+            delta_rot1 = 0.0
+        else:
+            delta_rot1 = self.angle_diff(np.arctan2(u[1, 1] - u[1, 0], u[0, 1] - u[0, 0]), u[2, 0])
         delta_trans = np.sqrt((u[0, 1] - u[0, 0]) ** 2 + (u[1, 1] - u[1, 0]) ** 2)
-        delta_rot2 = u[2, 1] - u[2, 0] - delta_rot1
+        delta_rot2 = self.angle_diff(u[2, 1] - u[2, 0], delta_rot1)
 
-        delta_rot1_hat = delta_rot1 - self.sample_normal(self.alpha1 * np.abs(delta_rot1) + self.alpha2 * delta_trans,
-                                                         m=M)
+        # Treat backwards and forwards motion symettrically for noise model:
+        delta_rot1_noise = np.min([np.abs(self.angle_diff(delta_rot1, 0)), np.abs(self.angle_diff(delta_rot1, np.pi))])
+        delta_rot2_noise = np.min([np.abs(self.angle_diff(delta_rot2, 0)), np.abs(self.angle_diff(delta_rot2, np.pi))])
+
+        delta_rot1_hat = self.angle_diff_vec(delta_rot1, self.sample_normal(self.alpha1 * (delta_rot1_noise**2) + self.alpha2 * (delta_trans**2), m=M))
         delta_trans_hat = delta_trans - self.sample_normal(
-            self.alpha3 * delta_trans + self.alpha4 * (np.abs(delta_rot1) + np.abs(delta_rot2)), m=M)
-        delta_rot2_hat = delta_rot2 - self.sample_normal(self.alpha1 * np.abs(delta_rot2) + self.alpha2 * delta_trans,
-                                                         m=M)
+            self.alpha3 * (delta_trans**2) + self.alpha4 * (delta_rot1_noise**2) + self.alpha4 * (delta_rot2_noise**2), m=M)
+        delta_rot2_hat = self.angle_diff_vec(delta_rot2, self.sample_normal(self.alpha1 * (delta_rot2_noise**2) + self.alpha2 * (delta_trans**2), m=M))
 
         xp = x_prev[0, :] + delta_trans_hat * np.cos(x_prev[2, :] + delta_rot1_hat)
         yp = x_prev[1, :] + delta_trans_hat * np.sin(x_prev[2, :] + delta_rot1_hat)
@@ -633,6 +642,41 @@ class MonteCarloLocalization:
             The equivalent angle in between -pi and pi
         """
         return (theta + np.pi) % (2 * np.pi) - np.pi
+
+    def angle_diff(self, a, b):
+
+        a = self.wrap_theta(a)
+        b = self.wrap_theta(b)
+        d1 = a - b
+        d2 = 2 * np.pi - np.abs(d1)
+
+        if d1 > 0:
+            d2 = -d2  # If d1 is positive, d2 should be negative
+
+
+        if np.abs(d1) < np.abs(d2):
+            return d1  # If d1 is smaller, use d1
+        else:
+            return d2
+
+    def angle_diff_vec(self, a, b):
+        diff = np.zeros_like(a)
+
+        a = self.wrap_theta(a)
+        b = self.wrap_theta(b)
+        d1 = a - b
+        d2 = 2 * np.pi - np.abs(d1)
+
+        indx = np.where(d1 > 0)[0]
+        if len(indx) > 0:
+            d2[indx] = -d2[indx]  # If d1 is positive, d2 should be negative
+
+        diff = d2
+        indx = np.where(np.abs(d1) < np.abs(d2))[0]
+        if len(indx) > 0:
+            diff[indx] = d1[indx]  # If d1 is smaller, use d1
+
+        return diff
 
     def measurement_model0(self, z, x, theta_sens):
         """
