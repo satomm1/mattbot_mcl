@@ -101,6 +101,8 @@ class MapPreparer:
         mod_map = np.array(mod_map).astype(int)
 
         # Convert to occupancy grid values
+        unique_map_values = np.unique(map)
+        print("Unique map values:", unique_map_values)
         unknown_loc = np.where(map == 205)
         free_loc = np.where(map == 254)
         occupied_loc = np.where(map == 0)
@@ -108,10 +110,13 @@ class MapPreparer:
         map[free_loc] = 0
         map[occupied_loc] = 100
 
-        mod_loc = np.where(mod_map == 204)
-        mod_other_loc = np.where(mod_map != 204)
+        unique_map_mod_values = np.unique(mod_map)
+        print("Unique mod map values:", unique_map_mod_values)
+        # Find where the map_mod is not 254 and not 205
+        mod_loc = np.where((mod_map != 254) & (mod_map != 205))
+        mod_map = map.copy()
         mod_map[mod_loc] = 100
-        mod_map[mod_other_loc] = -1
+        
 
         if os.path.exists('../maps/' + pgm_occ_file):
             with open('../maps/' + pgm_occ_file, 'rb') as f:
