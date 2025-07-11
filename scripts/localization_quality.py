@@ -42,8 +42,8 @@ class LocalizationQuality:
         self.localized = False
         self.match_with_map = False
 
-        # Store the last 20 locations and weights so that we can determine if we have lost localization
-        self.max_history_length = 20
+        # Store the last 30 locations and weights so that we can determine if we have lost localization
+        self.max_history_length = 30
         self.location_history = [] 
         self.weight_history = []
 
@@ -100,6 +100,54 @@ class LocalizationQuality:
         # Instead of doing product of all probabilities, we sum p^3 as a heuristic
         return np.sum(np.power(p,3))
 
+    def measurement_model2(self, z, x, theta_sens):
+        """
+        The measurement model for the LIDAR sensor. This is a likelihood model using distance to nearest neighbor
+        See Probabilistic Robotics, Table 6.3 pg 172
+
+        This model achieves the measurement model with no loop in z and takes multiple x particles as input
+        This model achieves approx 10x speedup over measurement_model1, which has to loop over particles
+
+        Args:
+            z: The LIDAR measurement, a 1xN array where N is the number of measurements, we assume all measurements
+                outside of the max range are already removed from this set
+            x: The pose of the robot, a 3xM array (x, y, theta), M is number of particles
+            theta_sens: The angle of the sensor relative to the robot's frame, a 1xN array
+
+        Returns:
+            The likelihood of the measurement given the poses, a 1xM array
+        """
+        n = len(z)  # number of measurements
+
+        # Tile the x array to match the number of measurements
+        x_tiled = np.tile(x[:, :, np.newaxis], (1, 1, n))
+
+        # Calculate the x and y coordinates of the measurements in the map frame
+        x_meas = x_tiled[0, :, :] + z * np.cos(x_tiled[2, :, :] + theta_sens)
+        y_meas = x_tiled[1, :, :] + z * np.sin(x_tiled[2, :, :] + theta_sens)
+
+        # convert x_meas and y_meas to grid coordinates
+        x_grid = np.round(x_meas / self.map_resolution).astype(int)
+        y_grid = np.round(y_meas / self.map_resolution).astype(int)
+
+        # Get indices of out of range locations
+        out_of_range_x = np.where((x_grid < 0) | (x_grid >= self.map_width))
+        out_of_range_y = np.where((y_grid < 0) | (y_grid >= self.map_height))
+
+        # Clip the grid coordinates to be within the map
+        x_grid_norm = np.clip(x_grid, 0, self.map_width - 1)
+        y_grid_norm = np.clip(y_grid, 0, self.map_height - 1)
+
+        # Look up the probabilities from the precomputed table
+        p = self.prob_lookup_table[y_grid_norm, x_grid_norm]
+
+        # Set out of range locations to 1 / LIDAR_MAX_RANGE (these are unknown locations)
+        p[out_of_range_x[0], out_of_range_x[1]] = 1 / LIDAR_MAX_RANGE
+        p[out_of_range_y[0], out_of_range_y[1]] = 1 / LIDAR_MAX_RANGE
+
+        # Instead of doing product of all probabilities, we sum p^3 as a heuristic
+        return np.sum(np.power(p, 3), axis=1)
+
     def scan_callback(self, msg):
         """
         The callback for the laser scan subscriber. This function is called whenever a new laser scan message is
@@ -148,7 +196,7 @@ class LocalizationQuality:
 
         w = self.measurement_model1(ranges, current_pose, angles)
 
-        # Store the last 20 locations and weights
+        # Store the last 30 locations and weights
         self.location_history.append(current_pose)
         self.weight_history.append(w)
         if len(self.location_history) > self.max_history_length:
@@ -162,7 +210,7 @@ class LocalizationQuality:
             
             # Check if the weights have dropped significantly-compare most recent 10 weights to the average of the last 10
             recent_weights = self.weight_history[-10:]
-            old_weights = self.weight_history[:10]
+            old_weights = self.weight_history[10:-10]
             if np.mean(recent_weights) < 0.5 * np.mean(old_weights):
                 # We lost localization
                 rospy.loginfo("Lost localization")
@@ -170,8 +218,14 @@ class LocalizationQuality:
                 self.match_with_map = False
                 self.lost_localization_pub.publish(Bool(data=True))
 
+                # Get the pose that best matches the laser scans
+                weights = self.measurement_model2(ranges, np.array(self.location_history).squeeze(), angles)
+                best_index = np.argmax(weights)
+
+                print("Best index:", best_index)
+
                 # Now get the last good pose and publish it
-                last_good_pose = self.location_history[0]
+                last_good_pose = self.location_history[best_index]
                 last_good_pose_msg = PoseWithCovarianceStamped()
                 last_good_pose_msg.header.stamp = rospy.Time.now()
                 last_good_pose_msg.header.frame_id = "map"
@@ -183,9 +237,13 @@ class LocalizationQuality:
                 last_good_pose_msg.pose.pose.orientation.y = quat[1]
                 last_good_pose_msg.pose.pose.orientation.z = quat[2]
                 last_good_pose_msg.pose.pose.orientation.w = quat[3]
-                last_good_pose_msg.pose.covariance = [0.0] * 36
-                
-                self.initial_pose_pub.publish(last_good_pose_msg)
+                covariance = np.zeros((6, 6))
+                covariance[0, 0] = 0.1  # x variance
+                covariance[1, 1] = 0.1  # y variance
+                covariance[5, 5] = 3.14  # theta variance
+                last_good_pose_msg.pose.covariance = covariance.flatten().tolist()
+
+                # self.initial_pose_pub.publish(last_good_pose_msg)
 
         # print(rospy.get_time())
         
