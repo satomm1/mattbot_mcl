@@ -1,0 +1,7 @@
+<launch>
+
+    <node pkg="mattbot_mcl" type="localization_quality.py" name="localization_quality_node" output="screen">
+        <!-- No parameters needed -->
+    </node>
+
+</launch>

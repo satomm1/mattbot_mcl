@@ -163,6 +163,7 @@ include_directories(
 catkin_install_python(PROGRAMS
   scripts/mc_localization.py
   scripts/lidar_correction.py
+  scripts/localization_quality.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
