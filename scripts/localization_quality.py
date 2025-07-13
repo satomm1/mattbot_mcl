@@ -2,7 +2,7 @@ import rospy
 import rospkg
 import tf
 from std_msgs.msg import Bool
-from geometry_msgs.msg import Pose2D, PoseWithCovarianceStamped
+from geometry_msgs.msg import Pose2D, PoseWithCovarianceStamped, Twist
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import MapMetaData
 
@@ -42,17 +42,26 @@ class LocalizationQuality:
         self.localized = False
         self.match_with_map = False
 
+        self.turning_only = False  # If true, we only turn on the localization when we are turning
+
         # Store the last 30 locations and weights so that we can determine if we have lost localization
         self.max_history_length = 30
+        self.max_location_history_length = 60
         self.location_history = [] 
         self.weight_history = []
+
+        # Time since last loss of localization
+        self.last_lost_localization_time = rospy.Time.now()
 
         # Subscribe to laser scan
         self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback, queue_size=1)
         self.localized_sub = rospy.Subscriber('/localized', Bool, self.localized_callback, queue_size=10)
+
+        # Subscribe to cmd vel
+        self.nav_vel_sub = rospy.Subscriber('/cmd_vel', Twist, self.nav_vel_callback, queue_size=10)
         
         self.lost_localization_pub = rospy.Publisher('/lost_localization', Bool, queue_size=10)
-        self.initial_pose_pub = rospy.Publisher('/initialpose', PoseWithCovarianceStamped, queue_size=10)
+        self.initial_pose_pub = rospy.Publisher('/initialpose_relocalize', PoseWithCovarianceStamped, queue_size=10)
 
         # Transform listener to get the laser frame
         self.trans_listener = tf.TransformListener()
@@ -173,12 +182,16 @@ class LocalizationQuality:
         ranges = ranges[::self.lidar_measurement_skip]
         angles = angles[::self.lidar_measurement_skip]
 
+        total_possible_measurements = len(ranges)
+
         # Only use measurements that are within valid range
         valid_indx = np.where((ranges < range_max) & (ranges > range_min))
         if len(valid_indx[0]) < 200: 
             valid_indx = np.where((ranges < range_max+3) & (ranges > range_min))
         ranges = ranges[valid_indx]
         angles = angles[valid_indx]
+
+        num_valid_scans = len(ranges)
 
         try: 
             (translation, rotation) = self.trans_listener.lookupTransform(
@@ -196,30 +209,52 @@ class LocalizationQuality:
 
         w = self.measurement_model1(ranges, current_pose, angles)
 
+        # Normalize the weights based on number of valid measurements
+        if total_possible_measurements > 0:
+            w = w / num_valid_scans
+            # print(w)
+
         # Store the last 30 locations and weights
         self.location_history.append(current_pose)
         self.weight_history.append(w)
-        if len(self.location_history) > self.max_history_length:
-            self.location_history.pop(0)
+        if len(self.weight_history) > self.max_history_length:
             self.weight_history.pop(0)
 
+        if len(self.location_history) > self.max_location_history_length:
+            self.location_history.pop(0)
+
         # Check if we have lost localization
-        if True: #self.localized and self.match_with_map:
+        if True: # self.localized:  # and self.match_with_map:
             if len(self.weight_history) < self.max_history_length:
                 return
-            
+            elif self.turning_only:
+                return
+
             # Check if the weights have dropped significantly-compare most recent 10 weights to the average of the last 10
             recent_weights = self.weight_history[-10:]
             old_weights = self.weight_history[10:-10]
-            if np.mean(recent_weights) < 0.5 * np.mean(old_weights):
+            if np.mean(recent_weights) < 0.5 * np.mean(old_weights) or np.mean(recent_weights) < 2.0:
+                # pass
+
+                
+                
+                if (rospy.Time.now() - self.last_lost_localization_time).to_sec() < 15:
+                    # We have already lost localization recently, so we don't need to do anything
+                    return
+
                 # We lost localization
                 rospy.loginfo("Lost localization")
-                self.localized = False
-                self.match_with_map = False
-                self.lost_localization_pub.publish(Bool(data=True))
+                if np.mean(recent_weights) < 1300:
+                    rospy.loginfo("    Lost localization due to low weights")
+                self.last_lost_localization_time = rospy.Time.now()
+
+                # self.localized = False
+                # self.match_with_map = False
+                # self.lost_localization_pub.publish(Bool(data=True))
 
                 # Get the pose that best matches the laser scans
-                weights = self.measurement_model2(ranges, np.array(self.location_history).squeeze(), angles)
+                
+                weights = self.measurement_model2(ranges, np.array(self.location_history).squeeze().T, angles)
                 best_index = np.argmax(weights)
 
                 print("Best index:", best_index)
@@ -243,9 +278,22 @@ class LocalizationQuality:
                 covariance[5, 5] = 3.14  # theta variance
                 last_good_pose_msg.pose.covariance = covariance.flatten().tolist()
 
-                # self.initial_pose_pub.publish(last_good_pose_msg)
+                self.initial_pose_pub.publish(last_good_pose_msg)
 
         # print(rospy.get_time())
+
+    def nav_vel_callback(self, msg):
+        """
+        Callback for the cmd_vel subscriber. This function is called whenever a new cmd_vel message is received.
+        It checks if the robot is turning and sets the turning_only flag accordingly.
+
+        Args:
+            msg: Twist message containing the velocity commands
+        """
+        if msg.linear.x == 0.0 and msg.angular.z != 0.0:
+            self.turning_only = True
+        else:
+            self.turning_only = False
         
 
     def localized_callback(self, msg):
