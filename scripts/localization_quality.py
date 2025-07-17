@@ -1,7 +1,7 @@
 import rospy
 import rospkg
 import tf
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Int32
 from geometry_msgs.msg import Pose2D, PoseWithCovarianceStamped, Twist
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import MapMetaData
@@ -42,8 +42,6 @@ class LocalizationQuality:
         self.localized = False
         self.match_with_map = False
 
-        self.turning_only = False  # If true, we only turn on the localization when we are turning
-
         # Store the last 30 locations and weights so that we can determine if we have lost localization
         self.max_history_length = 30
         self.max_location_history_length = 60
@@ -59,9 +57,9 @@ class LocalizationQuality:
         self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback, queue_size=1)
         self.localized_sub = rospy.Subscriber('/localized', Bool, self.localized_callback, queue_size=10)
 
-        # Subscribe to cmd vel
-        self.nav_vel_sub = rospy.Subscriber('/cmd_vel', Twist, self.nav_vel_callback, queue_size=10)
-        
+        self.robot_state = 0
+        self.robot_state_sub = rospy.Subscriber('/robot_mode', Int32, self.robot_state_callback, queue_size=10)
+
         self.lost_localization_pub = rospy.Publisher('/lost_localization', Bool, queue_size=10)
         self.initial_pose_pub = rospy.Publisher('/initialpose_relocalize', PoseWithCovarianceStamped, queue_size=10)
 
@@ -232,7 +230,7 @@ class LocalizationQuality:
         # Check if we have lost localization
         if len(self.weight_history) < self.max_history_length:
             return
-        elif self.turning_only:
+        elif self.robot_state != 4:  # Only if the robot is in tracking mode should we check for localization loss
             return
 
         # Check if the weights have dropped significantly-compare most recent 10 weights to the average of the last 10
@@ -283,20 +281,9 @@ class LocalizationQuality:
             self.initial_pose_pub.publish(last_good_pose_msg)
 
         # print(rospy.get_time())
-
-    def nav_vel_callback(self, msg):
-        """
-        Callback for the cmd_vel subscriber. This function is called whenever a new cmd_vel message is received.
-        It checks if the robot is turning and sets the turning_only flag accordingly.
-
-        Args:
-            msg: Twist message containing the velocity commands
-        """
-        if msg.linear.x == 0.0 and msg.angular.z != 0.0:
-            self.turning_only = True
-        else:
-            self.turning_only = False
         
+    def robot_state_callback(self, msg):
+        self.robot_state = msg.data
 
     def localized_callback(self, msg):
         if not self.localized and msg.data:
