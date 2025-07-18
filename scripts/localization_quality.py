@@ -58,6 +58,7 @@ class LocalizationQuality:
         self.localized_sub = rospy.Subscriber('/localized', Bool, self.localized_callback, queue_size=10)
 
         self.robot_state = 0
+        self.made_idle_adjustment = False
         self.robot_state_sub = rospy.Subscriber('/robot_mode', Int32, self.robot_state_callback, queue_size=10)
 
         self.lost_localization_pub = rospy.Publisher('/lost_localization', Bool, queue_size=10)
@@ -230,6 +231,35 @@ class LocalizationQuality:
         # Check if we have lost localization
         if len(self.weight_history) < self.max_history_length:
             return
+        elif self.robot_state == 0:  # If idle, check if small rotation yield better weights
+            if not self.made_idle_adjustment:
+                angle_array = np.linspace(-np.pi/4, np.pi/4, 100) + laser_theta
+                possible_poses = np.column_stack((np.full(angle_array.shape, laser_x),
+                                                np.full(angle_array.shape, laser_y),
+                                                angle_array)).T
+                weights = self.measurement_model2(ranges, possible_poses, angles)
+                best_index = np.argmax(weights)
+                best_pose = possible_poses[:, best_index]
+                if abs(best_pose[2] - laser_theta) > 0.1:
+                    self.made_idle_adjustment = True
+                    rospy.loginfo("Idle adjustment made, angle adjustment = %.2f radians", best_pose[2] - laser_theta)
+                    adjusted_pose = PoseWithCovarianceStamped()
+                    adjusted_pose.header.stamp = rospy.Time.now()
+                    adjusted_pose.header.frame_id = "map"
+                    adjusted_pose.pose.pose.position.x = best_pose[0]
+                    adjusted_pose.pose.pose.position.y = best_pose[1]
+                    adjusted_pose.pose.pose.position.z = 0.0
+                    quat = tf.transformations.quaternion_from_euler(0.0, 0.0, best_pose[2])
+                    adjusted_pose.pose.pose.orientation.x = quat[0]
+                    adjusted_pose.pose.pose.orientation.y = quat[1]
+                    adjusted_pose.pose.pose.orientation.z = quat[2]
+                    adjusted_pose.pose.pose.orientation.w = quat[3]
+                    covariance = np.zeros((6, 6))
+                    covariance[0, 0] = 0.1  # x variance
+                    covariance[1, 1] = 0.1  # y variance
+                    covariance[5, 5] = 0.5  # theta variance
+                    adjusted_pose.pose.covariance = covariance.flatten().tolist()
+                    self.initial_pose_pub.publish(adjusted_pose)
         elif self.robot_state != 4:  # Only if the robot is in tracking mode should we check for localization loss
             return
 
@@ -283,6 +313,10 @@ class LocalizationQuality:
         # print(rospy.get_time())
         
     def robot_state_callback(self, msg):
+
+        if msg.data == 0 and self.robot_state != 0:
+            self.made_idle_adjustment = False
+
         self.robot_state = msg.data
 
     def localized_callback(self, msg):
