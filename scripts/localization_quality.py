@@ -48,6 +48,10 @@ class LocalizationQuality:
         self.location_history = [] 
         self.weight_history = []
 
+        # Get parameters for determining localization loss
+        self.mean_weight_limit = rospy.get_param('/mean_weight_limit', 2.0)
+        self.weight_drop_factor = rospy.get_param('/weight_drop_factor', 0.5)
+
         # Time since last loss of localization
         self.last_lost_localization_time = rospy.Time.now()
 
@@ -266,8 +270,9 @@ class LocalizationQuality:
         # Check if the weights have dropped significantly-compare most recent 10 weights to the average of the last 10
         recent_weights = self.weight_history[-10:]
         old_weights = self.weight_history[10:-10]
-        if np.mean(recent_weights) < 0.5 * np.mean(old_weights) or np.mean(recent_weights) < 2.0:
-            
+        if (np.mean(recent_weights) < self.weight_drop_factor * np.mean(old_weights)) \
+                        or (np.mean(recent_weights) < self.mean_weight_limit):
+
             if (rospy.Time.now() - self.last_lost_localization_time).to_sec() < 15:
                 # We have already lost localization recently, so we don't need to do anything
                 return
