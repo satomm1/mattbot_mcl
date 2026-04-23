@@ -35,10 +35,12 @@ class MapPublisher:
         rospy.init_node('map_loader')
 
         map_file = rospy.get_param('~map_file', 'fullmap5_mod')
+        map_topic = rospy.get_param('~map_topic', '/map')
+        map_md_topic = rospy.get_param('~map_md_topic', '/map_metadata')
 
         # Map and map metadata publisher
-        self.map_pub = rospy.Publisher('/map', OccupancyGrid, queue_size=10)
-        self.map_md_pub = rospy.Publisher('/map_metadata', MapMetaData, queue_size=10)
+        self.map_pub = rospy.Publisher(map_topic, OccupancyGrid, queue_size=10)
+        self.map_md_pub = rospy.Publisher(map_md_topic, MapMetaData, queue_size=10)
 
         self.map_seq = 0
 
