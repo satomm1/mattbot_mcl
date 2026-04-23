@@ -1,11 +1,11 @@
 import rospy
+import rospkg
 from nav_msgs.msg import OccupancyGrid, MapMetaData
 import yaml
 import matplotlib.pyplot as plt
 import numpy as np
-import os
 
-from utils.grids import StochOccupancyGrid2D, DetOccupancyGrid2D
+from navigation_utils import StochOccupancyGrid2D
 
 class MapPublisher:
     """
@@ -24,14 +24,17 @@ class MapPublisher:
         topic. The map is represented as a 2D occupancy grid. The map is published periodically at a rate of 1 Hz.
     """
 
-    def __init__(self, map_file):
+    def __init__(self):
         """
-        Initializes the MapLoader class
+        Initializes the MapLoader class.
 
-        Args:
-            map_file: The file containing the map information in yaml format
+        Reads the map stem name from the private ROS parameter ``~map_file``
+        (e.g. ``fullmap5_mod`` for ``../maps/fullmap5_mod.yaml``). If unset,
+        defaults to ``fullmap5_mod``.
         """
         rospy.init_node('map_loader')
+
+        map_file = rospy.get_param('~map_file', 'fullmap5_mod')
 
         # Map and map metadata publisher
         self.map_pub = rospy.Publisher('/map', OccupancyGrid, queue_size=10)
@@ -41,29 +44,6 @@ class MapPublisher:
 
         self.map_data, self.map_metadata = self.load_map(map_file)
         self.resolution = self.map_metadata.resolution
-
-        # if os.path.exists('lookup_table/' + map_file + '.npy'):
-        #     print("Loading Lookup Table...")
-        #     self.dist_lookup_table = np.load('lookup_table/' + map_file + '.npy')
-        #     np.save('lookup_table/mattbot_map', self.dist_lookup_table)
-        #     print("Lookup Table Loaded")
-        #     # fig, ax = plt.subplots()
-        #     # cbar = ax.imshow(self.dist_lookup_table, cmap='hot')
-        #     # fig.colorbar(cbar)
-        #     # plt.show()
-        # else:
-        #     print("Generating Lookup Table...")
-        #     self.dist_lookup_table =self.generate_dist_lookup_table()
-        #     self.dist_lookup_table = self.dist_lookup_table.T
-        #     print("Lookup Table Generated")
-        #     np.save('lookup_table/' + map_file, self.dist_lookup_table)
-
-        #     np.save('lookup_table/mattbot_map', self.dist_lookup_table)
-
-        #     fig, ax = plt.subplots()
-        #     cbar = ax.imshow(self.dist_lookup_table, cmap='hot')
-        #     fig.colorbar(cbar)
-        #     plt.show()
 
     def load_map(self, map_file):
         """
@@ -75,21 +55,20 @@ class MapPublisher:
         Returns:
             The map as a 2D occupancy grid
         """
-        with open('../maps/' + map_file + '.yaml', 'r') as f:
+        package_path = rospkg.RosPack().get_path('mattbot_mcl')
+        full_map_path = package_path + '/maps/' + map_file + '.yaml'
+
+        rospy.loginfo("Loading map from %s", full_map_path)
+        with open(full_map_path, 'r') as f:
             map_data = yaml.safe_load(f)
 
         pgm_file = map_data['image']
         resolution = map_data['resolution']
         origin = map_data['origin']
 
-        with open('../maps/' + pgm_file, 'rb') as f:
+        rospy.loginfo("Loading PGM file from %s", pgm_file)
+        with open(package_path + '/maps/' + pgm_file, 'rb') as f:
             pgm_data = plt.imread(f)
-
-        # Plot locations with pgm_data == 204
-        indx = np.where(pgm_data == 204)
-        plt.scatter(indx[1], indx[0], c='r', s=1)
-        plt.savefig("test3.png")
-
 
         # find range of values in pgm_data where value is not 205
         occupied_loc = np.where(pgm_data != 205)
@@ -98,8 +77,10 @@ class MapPublisher:
         min_y = np.min(occupied_loc[1])
         max_y = np.max(occupied_loc[1])
 
+        rospy.loginfo("Successfully loaded map: %d x %d", max_x - min_x + 1, max_y - min_y + 1)
+
         # Only get areas of map we care about
-        map = pgm_data[min_x:max_x, min_y:max_y]
+        map = pgm_data[min_x:max_x+1, min_y:max_y+1]
         map = np.array(map).astype(int)
 
         # Convert to occupancy grid values
@@ -215,6 +196,5 @@ class MapPublisher:
         pass
 
 if __name__ == '__main__':
-    map_file = 'fullmap5_mod'
-    map_loader = MapPublisher(map_file)
+    map_loader = MapPublisher()
     map_loader.run()

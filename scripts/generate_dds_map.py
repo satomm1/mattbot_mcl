@@ -94,10 +94,10 @@ class MapPreparer:
         max_y = np.max(occupied_loc[1])
 
         # Only get areas of map we care about
-        map = pgm_data[min_x:max_x, min_y:max_y]
+        map = pgm_data[min_x:max_x + 1, min_y:max_y + 1]
         map = np.array(map).astype(int)
 
-        mod_map = pgm_data_mod[min_x:max_x, min_y:max_y]
+        mod_map = pgm_data_mod[min_x:max_x + 1, min_y:max_y + 1]
         mod_map = np.array(mod_map).astype(int)
 
         # Convert to occupancy grid values

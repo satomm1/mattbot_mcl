@@ -1,0 +1,7 @@
+<launch>
+    <arg name="map_file" default="y2e2_5_5_25" />
+
+    <node pkg="mattbot_mcl" type="map_loader.py" name="map_loader" output="screen">
+        <param name="map_file" value="$(arg map_file)" />
+    </node>
+</launch>

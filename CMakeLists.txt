@@ -164,6 +164,7 @@ catkin_install_python(PROGRAMS
   scripts/mc_localization.py
   scripts/lidar_correction.py
   scripts/localization_quality.py
+  scripts/map_loader.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
