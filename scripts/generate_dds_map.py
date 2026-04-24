@@ -103,12 +103,19 @@ class MapPreparer:
         # Convert to occupancy grid values
         unique_map_values = np.unique(map)
         print("Unique map values:", unique_map_values)
+        for unique_value in unique_map_values:
+            if unique_value not in [205, 254, 0]:
+                # Map to the closest value among 205, 254, and 0
+                closest_value = min([205, 254, 0], key=lambda x: abs(x - unique_value))
+                map[map == unique_value] = closest_value
+
         unknown_loc = np.where(map == 205)
         free_loc = np.where(map == 254)
         occupied_loc = np.where(map == 0)
         map[unknown_loc] = -1
         map[free_loc] = 0
         map[occupied_loc] = 100
+         
 
         unique_map_mod_values = np.unique(mod_map)
         print("Unique mod map values:", unique_map_mod_values)
