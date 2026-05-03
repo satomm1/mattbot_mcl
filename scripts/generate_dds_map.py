@@ -8,6 +8,44 @@ import json
 
 from utils.grids import StochOccupancyGrid2D, DetOccupancyGrid2D
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+MAPS_DIR = os.path.normpath(os.path.join(_SCRIPT_DIR, "..", "maps"))
+
+
+def complete_map_names(maps_dir):
+    """
+    Map names that have all of: {name}.yaml, {name}.pgm, {name}_mod.pgm in maps_dir.
+    """
+    if not os.path.isdir(maps_dir):
+        return []
+    names = []
+    for entry in os.listdir(maps_dir):
+        if not entry.endswith(".yaml"):
+            continue
+        name = entry[: -len(".yaml")]
+        if not name:
+            continue
+        base = os.path.join(maps_dir, name)
+        if os.path.isfile(base + ".yaml") and os.path.isfile(base + ".pgm") and os.path.isfile(
+            base + "_mod.pgm"
+        ):
+            names.append(name)
+    return sorted(set(names))
+
+
+def maps_help_epilog(maps_dir):
+    names = complete_map_names(maps_dir)
+    lines = [
+        "Available --map_file names (each set is <name>.yaml, <name>.pgm, <name>_mod.pgm under mattbot_mcl/maps):",
+    ]
+    if not os.path.isdir(maps_dir):
+        lines.append(f"  (maps directory not found: {maps_dir})")
+    elif not names:
+        lines.append("  (no complete map sets found)")
+    else:
+        lines.extend(f"  {n}" for n in names)
+    return "\n".join(lines)
+
 class MapPreparer:
     """
     The MapLoader class
@@ -261,8 +299,18 @@ class MapPreparer:
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser(description='Generate DDS Map')
-    parser.add_argument('--map_file', type=str, help='The map file to load', default='map_aligned')
+    parser = argparse.ArgumentParser(
+        description="Generate DDS Map",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=maps_help_epilog(MAPS_DIR),
+    )
+    parser.add_argument(
+        "--map_file",
+        type=str,
+        metavar="NAME",
+        help="Map basename (no extension): loads mattbot_mcl/maps/<NAME>.yaml plus matching .pgm and _mod.pgm",
+        default="map_aligned",
+    )
     args = parser.parse_args()
     map_file = args.map_file
 
