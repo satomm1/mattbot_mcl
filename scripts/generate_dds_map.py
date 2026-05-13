@@ -3,6 +3,7 @@ import yaml
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import shutil
 import argparse
 import json
 
@@ -117,10 +118,28 @@ class MapPreparer:
         resolution = map_data['resolution']
         origin = map_data['origin']
 
-        with open('../maps/' + pgm_file, 'rb') as f:
+        base_pgm_path = '../maps/' + pgm_file
+        mod_pgm_path = '../maps/' + pgm_mod_file
+
+        if not os.path.isfile(base_pgm_path):
+            raise FileNotFoundError(f"Base map image not found: {base_pgm_path}")
+
+        if not os.path.isfile(mod_pgm_path):
+            print(f"No modified map file found: {mod_pgm_path}")
+            while True:
+                ans = input("Use the original map as the modified map? [y/n]: ").strip().lower()
+                if ans in ("y", "yes"):
+                    shutil.copy2(base_pgm_path, mod_pgm_path)
+                    print(f"Copied {base_pgm_path} -> {mod_pgm_path}")
+                    break
+                if ans in ("n", "no"):
+                    raise SystemExit("Aborted: add a _mod.pgm map or run again and answer y.")
+                print("Please answer y or n.")
+
+        with open(base_pgm_path, 'rb') as f:
             pgm_data = plt.imread(f)
 
-        with open('../maps/' + pgm_mod_file, 'rb') as f:
+        with open(mod_pgm_path, 'rb') as f:
             pgm_data_mod = plt.imread(f)
 
 
