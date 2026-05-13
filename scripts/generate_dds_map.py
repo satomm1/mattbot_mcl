@@ -15,7 +15,8 @@ MAPS_DIR = os.path.normpath(os.path.join(_SCRIPT_DIR, "..", "maps"))
 
 def complete_map_names(maps_dir):
     """
-    Map names that have all of: {name}.yaml, {name}.pgm, {name}_mod.pgm in maps_dir.
+    Map names that have {name}.yaml and {name}.pgm in maps_dir.
+    {name}_mod.pgm is optional; it can be created when running this script.
     """
     if not os.path.isdir(maps_dir):
         return []
@@ -27,9 +28,7 @@ def complete_map_names(maps_dir):
         if not name:
             continue
         base = os.path.join(maps_dir, name)
-        if os.path.isfile(base + ".yaml") and os.path.isfile(base + ".pgm") and os.path.isfile(
-            base + "_mod.pgm"
-        ):
+        if os.path.isfile(base + ".yaml") and os.path.isfile(base + ".pgm"):
             names.append(name)
     return sorted(set(names))
 
@@ -37,7 +36,7 @@ def complete_map_names(maps_dir):
 def maps_help_epilog(maps_dir):
     names = complete_map_names(maps_dir)
     lines = [
-        "Available --map_file names (each set is <name>.yaml, <name>.pgm, <name>_mod.pgm under mattbot_mcl/maps):",
+        "Available --map_file names (require <name>.yaml and <name>.pgm under mattbot_mcl/maps; <name>_mod.pgm optional):",
     ]
     if not os.path.isdir(maps_dir):
         lines.append(f"  (maps directory not found: {maps_dir})")
@@ -327,7 +326,7 @@ if __name__ == '__main__':
         "--map_file",
         type=str,
         metavar="NAME",
-        help="Map basename (no extension): loads mattbot_mcl/maps/<NAME>.yaml plus matching .pgm and _mod.pgm",
+        help="Map basename (no extension): loads mattbot_mcl/maps/<NAME>.yaml and <NAME>.pgm; <NAME>_mod.pgm optional (prompt to copy from .pgm if missing)",
         default="map_aligned",
     )
     args = parser.parse_args()
