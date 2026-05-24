@@ -56,6 +56,7 @@ class LocalizationQuality:
         self.last_lost_localization_time = rospy.Time.now()
 
         self.localized_start_time = 0
+        self.localization_warmup_sec = rospy.get_param('~localization_warmup_sec', 10.0)
 
         # Subscribe to laser scan
         self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback, queue_size=1)
@@ -65,7 +66,7 @@ class LocalizationQuality:
         self.made_idle_adjustment = False
         self.pending_park_heading_fix = False
         self.park_fix_ready_time = rospy.Time(0)
-        self.park_settle_duration = rospy.get_param('~park_settle_duration', 1.0)
+        self.park_settle_duration = rospy.get_param('~park_settle_duration', 0.5)
         self.heading_weight_ratio = rospy.get_param('~heading_weight_ratio', 1.15)
         self.heading_min_delta = rospy.get_param('~heading_min_delta', 0.05)
         self.robot_state_sub = rospy.Subscriber('/robot_mode', Int32, self.robot_state_callback, queue_size=10)
@@ -254,8 +255,15 @@ class LocalizationQuality:
             msg: LaserScan message
         """
 
-        if not self.localized or (rospy.Time.now() - self.localized_start_time).to_sec() < 10:
-            # If we are not localized or have just started localization, we don't process the scan
+        if not self.localized:
+            return
+
+        # Brief settle after park spin; skip heavy work until ready
+        if (
+            self.robot_state == 0
+            and self.pending_park_heading_fix
+            and rospy.Time.now() < self.park_fix_ready_time
+        ):
             return
 
         # Get the LIDAR measurements from the message
@@ -314,24 +322,22 @@ class LocalizationQuality:
         if len(self.location_history) > self.max_location_history_length:
             self.location_history.pop(0)
 
-        # Post-park heading fix (PARK_HEADING -> IDLE); does not require full weight history
-        if self.robot_state == 0 and self.pending_park_heading_fix:
-            if rospy.Time.now() >= self.park_fix_ready_time:
-                self.try_heading_correction(
-                    ranges, angles, laser_x, laser_y, laser_theta, w, "park"
-                )
-                self.made_idle_adjustment = True
-                self.pending_park_heading_fix = False
+        # Heading correction while idle: no warmup or weight-history requirement
+        if self.robot_state == 0 and (self.pending_park_heading_fix or not self.made_idle_adjustment):
+            reason = "park" if self.pending_park_heading_fix else "idle"
+            self.try_heading_correction(
+                ranges, angles, laser_x, laser_y, laser_theta, w, reason
+            )
+            self.made_idle_adjustment = True
+            self.pending_park_heading_fix = False
+            return
+
+        # Loss-of-localization monitoring needs time to build a stable weight baseline
+        if (rospy.Time.now() - self.localized_start_time).to_sec() < self.localization_warmup_sec:
             return
 
         # Check if we have lost localization
         if len(self.weight_history) < self.max_history_length:
-            return
-        if self.robot_state == 0 and not self.made_idle_adjustment:
-            self.try_heading_correction(
-                ranges, angles, laser_x, laser_y, laser_theta, w, "idle"
-            )
-            self.made_idle_adjustment = True
             return
         if self.robot_state != 4:  # Only if the robot is in tracking mode should we check for localization loss
             return
@@ -407,7 +413,7 @@ class LocalizationQuality:
             rospy.loginfo("Robot is localized")
             self.localized_start_time = rospy.Time.now()
             self.localized = True
-            
+            self.made_idle_adjustment = False
 
     def run(self):
         """
