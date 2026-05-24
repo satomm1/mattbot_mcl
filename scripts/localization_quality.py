@@ -63,10 +63,18 @@ class LocalizationQuality:
 
         self.robot_state = 0
         self.made_idle_adjustment = False
+        self.pending_park_heading_fix = False
+        self.park_fix_ready_time = rospy.Time(0)
+        self.park_settle_duration = rospy.get_param('~park_settle_duration', 1.0)
+        self.heading_weight_ratio = rospy.get_param('~heading_weight_ratio', 1.15)
+        self.heading_min_delta = rospy.get_param('~heading_min_delta', 0.05)
         self.robot_state_sub = rospy.Subscriber('/robot_mode', Int32, self.robot_state_callback, queue_size=10)
 
         self.lost_localization_pub = rospy.Publisher('/lost_localization', Bool, queue_size=10)
-        self.initial_pose_pub = rospy.Publisher('/initialpose_relocalize', PoseWithCovarianceStamped, queue_size=10)
+        self.initial_pose_pub = rospy.Publisher('/initialpose', PoseWithCovarianceStamped, queue_size=10)
+        self.initial_pose_relocalize_pub = rospy.Publisher(
+            '/initialpose_relocalize', PoseWithCovarianceStamped, queue_size=10
+        )
 
         # Transform listener to get the laser frame
         self.trans_listener = tf.TransformListener()
@@ -162,6 +170,80 @@ class LocalizationQuality:
         # Instead of doing product of all probabilities, we sum p^3 as a heuristic
         return np.sum(np.power(p, 3), axis=1)
 
+    def find_best_heading(self, ranges, angles, x, y, theta_center):
+        """Coarse then fine search for heading that best matches the scan at fixed (x, y)."""
+        coarse_angles = np.linspace(-np.pi / 4, np.pi / 4, 100) + theta_center
+        coarse_poses = np.column_stack((
+            np.full(coarse_angles.shape, x),
+            np.full(coarse_angles.shape, y),
+            coarse_angles,
+        )).T
+        coarse_weights = self.measurement_model2(ranges, coarse_poses, angles)
+        coarse_best = int(np.argmax(coarse_weights))
+        coarse_theta = coarse_angles[coarse_best]
+
+        fine_angles = np.linspace(-0.1, 0.1, 50) + coarse_theta
+        fine_poses = np.column_stack((
+            np.full(fine_angles.shape, x),
+            np.full(fine_angles.shape, y),
+            fine_angles,
+        )).T
+        fine_weights = self.measurement_model2(ranges, fine_poses, angles)
+        fine_best = int(np.argmax(fine_weights))
+        return fine_angles[fine_best], fine_weights[fine_best]
+
+    def publish_heading_correction(self, x, y, theta):
+        """Publish a heading-only AMCL reset (tight x/y, moderate theta covariance)."""
+        msg = PoseWithCovarianceStamped()
+        msg.header.stamp = rospy.Time.now()
+        msg.header.frame_id = "map"
+        msg.pose.pose.position.x = x
+        msg.pose.pose.position.y = y
+        msg.pose.pose.position.z = 0.0
+        quat = tf.transformations.quaternion_from_euler(0.0, 0.0, theta)
+        msg.pose.pose.orientation.x = quat[0]
+        msg.pose.pose.orientation.y = quat[1]
+        msg.pose.pose.orientation.z = quat[2]
+        msg.pose.pose.orientation.w = quat[3]
+        covariance = np.zeros((6, 6))
+        covariance[0, 0] = 0.01
+        covariance[1, 1] = 0.01
+        covariance[5, 5] = 0.05
+        msg.pose.covariance = covariance.flatten().tolist()
+        self.initial_pose_pub.publish(msg)
+
+    def try_heading_correction(self, ranges, angles, laser_x, laser_y, laser_theta, current_weight, reason):
+        """
+        Search for a better heading at the current position; publish /initialpose if confident.
+        Returns True if a correction was published.
+        """
+        best_theta, best_weight = self.find_best_heading(
+            ranges, angles, laser_x, laser_y, laser_theta
+        )
+        delta = abs(np.arctan2(
+            np.sin(best_theta - laser_theta),
+            np.cos(best_theta - laser_theta),
+        ))
+        if delta < self.heading_min_delta:
+            rospy.logdebug(
+                "%s heading check: delta %.3f rad below threshold, no correction",
+                reason, delta,
+            )
+            return False
+        if best_weight <= current_weight * self.heading_weight_ratio:
+            rospy.logdebug(
+                "%s heading check: scan match not better enough (%.4f vs %.4f), no correction",
+                reason, best_weight, current_weight,
+            )
+            return False
+
+        rospy.loginfo(
+            "%s heading correction: delta=%.3f rad, weight %.4f -> %.4f",
+            reason, delta, current_weight, best_weight,
+        )
+        self.publish_heading_correction(laser_x, laser_y, best_theta)
+        return True
+
     def scan_callback(self, msg):
         """
         The callback for the laser scan subscriber. This function is called whenever a new laser scan message is
@@ -232,39 +314,26 @@ class LocalizationQuality:
         if len(self.location_history) > self.max_location_history_length:
             self.location_history.pop(0)
 
+        # Post-park heading fix (PARK_HEADING -> IDLE); does not require full weight history
+        if self.robot_state == 0 and self.pending_park_heading_fix:
+            if rospy.Time.now() >= self.park_fix_ready_time:
+                self.try_heading_correction(
+                    ranges, angles, laser_x, laser_y, laser_theta, w, "park"
+                )
+                self.made_idle_adjustment = True
+                self.pending_park_heading_fix = False
+            return
+
         # Check if we have lost localization
         if len(self.weight_history) < self.max_history_length:
             return
-        elif self.robot_state == 0:  # If idle, check if small rotation yield better weights
-            if not self.made_idle_adjustment:
-                angle_array = np.linspace(-np.pi/4, np.pi/4, 100) + laser_theta
-                possible_poses = np.column_stack((np.full(angle_array.shape, laser_x),
-                                                np.full(angle_array.shape, laser_y),
-                                                angle_array)).T
-                weights = self.measurement_model2(ranges, possible_poses, angles)
-                best_index = np.argmax(weights)
-                best_pose = possible_poses[:, best_index]
-                if abs(best_pose[2] - laser_theta) > 0.1:
-                    self.made_idle_adjustment = True
-                    rospy.loginfo("Idle adjustment made, angle adjustment = %.2f radians", best_pose[2] - laser_theta)
-                    adjusted_pose = PoseWithCovarianceStamped()
-                    adjusted_pose.header.stamp = rospy.Time.now()
-                    adjusted_pose.header.frame_id = "map"
-                    adjusted_pose.pose.pose.position.x = best_pose[0]
-                    adjusted_pose.pose.pose.position.y = best_pose[1]
-                    adjusted_pose.pose.pose.position.z = 0.0
-                    quat = tf.transformations.quaternion_from_euler(0.0, 0.0, best_pose[2])
-                    adjusted_pose.pose.pose.orientation.x = quat[0]
-                    adjusted_pose.pose.pose.orientation.y = quat[1]
-                    adjusted_pose.pose.pose.orientation.z = quat[2]
-                    adjusted_pose.pose.pose.orientation.w = quat[3]
-                    covariance = np.zeros((6, 6))
-                    covariance[0, 0] = 0.1  # x variance
-                    covariance[1, 1] = 0.1  # y variance
-                    covariance[5, 5] = 0.5  # theta variance
-                    adjusted_pose.pose.covariance = covariance.flatten().tolist()
-                    self.initial_pose_pub.publish(adjusted_pose)
-        elif self.robot_state != 4:  # Only if the robot is in tracking mode should we check for localization loss
+        if self.robot_state == 0 and not self.made_idle_adjustment:
+            self.try_heading_correction(
+                ranges, angles, laser_x, laser_y, laser_theta, w, "idle"
+            )
+            self.made_idle_adjustment = True
+            return
+        if self.robot_state != 4:  # Only if the robot is in tracking mode should we check for localization loss
             return
 
         # Check if the weights have dropped significantly-compare most recent 10 weights to the average of the last 10
@@ -313,13 +382,22 @@ class LocalizationQuality:
             covariance[5, 5] = 3.14  # theta variance
             last_good_pose_msg.pose.covariance = covariance.flatten().tolist()
 
-            self.initial_pose_pub.publish(last_good_pose_msg)
+            self.initial_pose_relocalize_pub.publish(last_good_pose_msg)
 
         # print(rospy.get_time())
         
     def robot_state_callback(self, msg):
-
-        if msg.data == 0 and self.robot_state != 0:
+        prev_state = self.robot_state
+        # PARK_HEADING (6) -> IDLE (0): schedule heading correction after settle
+        if prev_state == 6 and msg.data == 0:
+            self.pending_park_heading_fix = True
+            self.park_fix_ready_time = rospy.Time.now() + rospy.Duration(self.park_settle_duration)
+            self.made_idle_adjustment = False
+            rospy.loginfo(
+                "Park complete; heading correction scheduled in %.1fs",
+                self.park_settle_duration,
+            )
+        elif msg.data == 0 and prev_state != 0:
             self.made_idle_adjustment = False
 
         self.robot_state = msg.data
