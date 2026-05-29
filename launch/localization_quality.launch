@@ -13,6 +13,17 @@
 
     <node pkg="mattbot_mcl" type="localization_quality.py" name="localization_quality_node" output="screen">
         <param name="diagnostics_log_interval" value="2.0"/>
+        <!-- Relative drop is primary; set use_absolute_score_floor true to also use mean_weight_limit -->
+        <param name="use_absolute_score_floor" value="false"/>
+        <param name="min_improvement_ratio" value="1.15"/>
+        <param name="max_recovery_pose_distance" value="3.0"/>
+        <param name="recovery_history_length" value="20"/>
+        <param name="local_search_radius" value="0.2"/>
+        <param name="local_search_step" value="0.2"/>
+        <param name="recovery_cooldown_sec" value="15.0"/>
+        <param name="localized_laser_range_max" value="3.0"/>
+        <!-- Skip loss detection briefly after ALIGN->TRACK (avoids false recovery) -->
+        <param name="track_monitor_grace_sec" value="1.0"/>
     </node>
 
 </launch>

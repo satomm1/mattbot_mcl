@@ -2,7 +2,7 @@ import rospy
 import rospkg
 import tf
 from std_msgs.msg import Bool, Int32, Float32
-from geometry_msgs.msg import Pose2D, PoseWithCovarianceStamped, Twist
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import MapMetaData
 
@@ -10,55 +10,57 @@ import numpy as np
 
 LIDAR_MAX_RANGE = 16
 
+
 class LocalizationQuality:
     def __init__(self):
-        # Initialize the node
         rospy.init_node('localization_quality', anonymous=True)
 
-        # This table will be the lookup table for the distance to the nearest obstacle
         rospack = rospkg.RosPack()
         pkg_path = rospack.get_path('mattbot_mcl')
         data_path = pkg_path + '/lookup_table/current_map.npy'
         self.dist_lookup_table = np.load(data_path)
-        unknown_indx = np.where(self.dist_lookup_table == -1)
 
-        self.z_hit = 0.75
-        self.z_random = 0.25
-        self.sigma_hit = 0.1  # Standard deviation for the Gaussian distribution
+        self.lidar_measurement_skip = rospy.get_param('~lidar_measurement_skip', 2)
 
-        self.lidar_measurement_skip = 2  # Skip every nth measurement to speed up computations
-
-        # Generate the probability lookup table based on distance to nearest obstacle
-        self.prob_lookup_table = self.z_hit / np.sqrt(2 * np.pi * (self.sigma_hit ** 2)) * np.exp(
-            -0.5 * (self.dist_lookup_table) ** 2 / (self.sigma_hit ** 2)) + self.z_random / LIDAR_MAX_RANGE
-        self.prob_lookup_table[unknown_indx] = 1 / LIDAR_MAX_RANGE
-
-        # Wait for /map_metadata message
         map_md = rospy.wait_for_message('/map_metadata', MapMetaData)
         self.map_resolution = map_md.resolution
         self.map_width = map_md.width
         self.map_height = map_md.height
 
         self.localized = False
-        self.match_with_map = False
-
-        # Store the last 30 locations and weights so that we can determine if we have lost localization
-        self.max_history_length = 30
-        self.max_location_history_length = 60
-        self.location_history = [] 
-        self.weight_history = []
-
-        # Get parameters for determining localization loss
-        self.mean_weight_limit = rospy.get_param('/mean_weight_limit', 2.0)
-        self.weight_drop_factor = rospy.get_param('/weight_drop_factor', 0.5)
-
-        # Time since last loss of localization
-        self.last_lost_localization_time = rospy.Time.now()
-
         self.localized_start_time = 0
         self.localization_warmup_sec = rospy.get_param('~localization_warmup_sec', 10.0)
+        self.track_monitor_grace_sec = rospy.get_param('~track_monitor_grace_sec', 2.0)
+        self.track_monitor_start_time = rospy.Time(0)
 
-        # Subscribe to laser scan
+        self.max_history_length = rospy.get_param('~max_history_length', 30)
+        self.max_location_history_length = rospy.get_param(
+            '~recovery_history_length', 20
+        )
+        self.location_history = []
+        self.weight_history = []
+
+        self.weight_drop_factor = rospy.get_param('/weight_drop_factor', 0.5)
+        self.use_absolute_score_floor = rospy.get_param(
+            '~use_absolute_score_floor', False
+        )
+        self.mean_weight_limit = rospy.get_param('/mean_weight_limit', 2.0)
+        self.recovery_cooldown_sec = rospy.get_param('~recovery_cooldown_sec', 15.0)
+        self.min_improvement_ratio = rospy.get_param('~min_improvement_ratio', 1.15)
+        self.max_recovery_pose_distance = rospy.get_param(
+            '~max_recovery_pose_distance', 2.0
+        )
+        self.local_search_radius = rospy.get_param('~local_search_radius', 0.2)
+        self.local_search_step = rospy.get_param('~local_search_step', 0.2)
+        self.localized_laser_range_max = rospy.get_param(
+            '~localized_laser_range_max', 3.0
+        )
+
+        self.last_lost_localization_time = rospy.Time.now()
+
+        self._load_measurement_model_params()
+        self._rebuild_prob_lookup_table()
+
         self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback, queue_size=1)
         self.localized_sub = rospy.Subscriber('/localized', Bool, self.localized_callback, queue_size=10)
 
@@ -76,9 +78,7 @@ class LocalizationQuality:
         self.initial_pose_relocalize_pub = rospy.Publisher(
             '/initialpose_relocalize', PoseWithCovarianceStamped, queue_size=10
         )
-        self.scan_match_score_pub = rospy.Publisher(
-            '~scan_match_score', Float32, queue_size=1
-        )
+        self.scan_match_score_pub = rospy.Publisher('~scan_match_score', Float32, queue_size=1)
         self.scan_match_recent_mean_pub = rospy.Publisher(
             '~scan_match_recent_mean', Float32, queue_size=1
         )
@@ -91,8 +91,72 @@ class LocalizationQuality:
         self.diagnostics_log_interval = rospy.get_param('~diagnostics_log_interval', 2.0)
         self._last_diagnostics_log_time = rospy.Time(0)
 
-        # Transform listener to get the laser frame
         self.trans_listener = tf.TransformListener()
+
+        rospy.loginfo(
+            "localization_quality: model z_hit=%.3f z_rand=%.3f sigma_hit=%.4f "
+            "range_max=%.2f min_improvement=%.2f max_pose_dist=%.2fm",
+            self.z_hit,
+            self.z_random,
+            self.sigma_hit,
+            self.localized_laser_range_max,
+            self.min_improvement_ratio,
+            self.max_recovery_pose_distance,
+        )
+
+    def _load_measurement_model_params(self):
+        """Match AMCL / navigator laser params when available."""
+        self.z_hit = float(
+            rospy.get_param(
+                '~z_hit',
+                rospy.get_param(
+                    '/amcl/laser_z_hit',
+                    rospy.get_param('/z_hit', 0.75),
+                ),
+            )
+        )
+        self.z_random = float(
+            rospy.get_param(
+                '~z_rand',
+                rospy.get_param(
+                    '/amcl/laser_z_rand',
+                    rospy.get_param('/z_rand', 0.25),
+                ),
+            )
+        )
+        self.sigma_hit = float(
+            rospy.get_param(
+                '~sigma_hit',
+                rospy.get_param(
+                    '/amcl/laser_sigma_hit',
+                    rospy.get_param('/sigma_hit', 0.1),
+                ),
+            )
+        )
+        total = self.z_hit + self.z_random
+        if total > 0:
+            self.z_hit /= total
+            self.z_random /= total
+
+    def _rebuild_prob_lookup_table(self):
+        unknown_indx = np.where(self.dist_lookup_table == -1)
+        self.prob_lookup_table = (
+            self.z_hit
+            / np.sqrt(2 * np.pi * (self.sigma_hit ** 2))
+            * np.exp(-0.5 * (self.dist_lookup_table) ** 2 / (self.sigma_hit ** 2))
+            + self.z_random / LIDAR_MAX_RANGE
+        )
+        self.prob_lookup_table[unknown_indx] = 1 / LIDAR_MAX_RANGE
+
+    def _normalize_scan_score(self, raw_score, num_valid_scans):
+        if num_valid_scans > 0:
+            return raw_score / num_valid_scans
+        return raw_score
+
+    def _score_pose(self, ranges, angles, x, y, theta, num_valid_scans):
+        pose = np.array([[x, y, theta]]).T
+        raw = self.measurement_model1(ranges, pose, angles)
+        return self._normalize_scan_score(raw, num_valid_scans)
 
     def measurement_model1(self, z, x, theta_sens):
         """
@@ -185,8 +249,30 @@ class LocalizationQuality:
         # Instead of doing product of all probabilities, we sum p^3 as a heuristic
         return np.sum(np.power(p, 3), axis=1)
 
-    def find_best_heading(self, ranges, angles, x, y, theta_center):
-        """Coarse then fine search for heading that best matches the scan at fixed (x, y)."""
+    def _preprocess_scan(self, msg):
+        ranges = np.array(msg.ranges)
+        angle_min = msg.angle_min
+        angle_max = msg.angle_max
+        angle_increment = msg.angle_increment
+        range_min = msg.range_min
+        range_max = self.localized_laser_range_max
+
+        angles = np.arange(angle_min, angle_max, angle_increment)
+        ranges = ranges[:: self.lidar_measurement_skip]
+        angles = angles[:: self.lidar_measurement_skip]
+        total_possible = len(ranges)
+
+        valid_indx = np.where((ranges < range_max) & (ranges > range_min))
+        if len(valid_indx[0]) < 200:
+            valid_indx = np.where(
+                (ranges < range_max + 3) & (ranges > range_min)
+            )
+        ranges = ranges[valid_indx]
+        angles = angles[valid_indx]
+        num_valid = len(ranges)
+        return ranges, angles, num_valid, total_possible
+
+    def find_best_heading(self, ranges, angles, x, y, theta_center, num_valid_scans):
         coarse_angles = np.linspace(-np.pi / 4, np.pi / 4, 100) + theta_center
         coarse_poses = np.column_stack((
             np.full(coarse_angles.shape, x),
@@ -194,6 +280,7 @@ class LocalizationQuality:
             coarse_angles,
         )).T
         coarse_weights = self.measurement_model2(ranges, coarse_poses, angles)
+        coarse_weights = coarse_weights / max(num_valid_scans, 1)
         coarse_best = int(np.argmax(coarse_weights))
         coarse_theta = coarse_angles[coarse_best]
 
@@ -204,14 +291,56 @@ class LocalizationQuality:
             fine_angles,
         )).T
         fine_weights = self.measurement_model2(ranges, fine_poses, angles)
+        fine_weights = fine_weights / max(num_valid_scans, 1)
         fine_best = int(np.argmax(fine_weights))
         return fine_angles[fine_best], fine_weights[fine_best]
 
-    def publish_heading_correction(self, x, y, theta):
-        """Publish a heading-only AMCL reset (tight x/y, moderate theta covariance)."""
+    def _local_search_offsets(self):
+        step = self.local_search_step
+        radius = self.local_search_radius
+        vals = np.arange(-radius, radius + step * 0.5, step)
+        offsets = []
+        for dx in vals:
+            for dy in vals:
+                offsets.append((float(dx), float(dy)))
+        return offsets
+
+    def find_best_recovery_pose(
+        self, ranges, angles, laser_x, laser_y, laser_theta, current_w, num_valid_scans
+    ):
+        """
+        Search current pose, local (x,y) grid with heading refinement, and recent
+        nearby history poses. Returns (x, y, theta, score, source) or None.
+        """
+        best = (laser_x, laser_y, laser_theta, current_w, 'current')
+
+        for dx, dy in self._local_search_offsets():
+            if dx == 0.0 and dy == 0.0:
+                continue
+            cx = laser_x + dx
+            cy = laser_y + dy
+            th, w = self.find_best_heading(
+                ranges, angles, cx, cy, laser_theta, num_valid_scans
+            )
+            if w > best[3]:
+                best = (cx, cy, th, w, 'local_search')
+
+        for pose in self.location_history[-self.max_location_history_length :]:
+            px = float(pose[0, 0])
+            py = float(pose[1, 0])
+            pth = float(pose[2, 0])
+            if np.hypot(px - laser_x, py - laser_y) > self.max_recovery_pose_distance:
+                continue
+            w = self._score_pose(ranges, angles, px, py, pth, num_valid_scans)
+            if w > best[3]:
+                best = (px, py, pth, w, 'history')
+
+        return best
+
+    def _make_initial_pose_msg(self, x, y, theta):
         msg = PoseWithCovarianceStamped()
         msg.header.stamp = rospy.Time.now()
-        msg.header.frame_id = "map"
+        msg.header.frame_id = 'map'
         msg.pose.pose.position.x = x
         msg.pose.pose.position.y = y
         msg.pose.pose.position.z = 0.0
@@ -221,46 +350,61 @@ class LocalizationQuality:
         msg.pose.pose.orientation.z = quat[2]
         msg.pose.pose.orientation.w = quat[3]
         covariance = np.zeros((6, 6))
+        covariance[0, 0] = 0.1
+        covariance[1, 1] = 0.1
+        covariance[5, 5] = 3.14
+        msg.pose.covariance = covariance.flatten().tolist()
+        return msg
+
+    def publish_heading_correction(self, x, y, theta):
+        msg = self._make_initial_pose_msg(x, y, theta)
+        covariance = np.zeros((6, 6))
         covariance[0, 0] = 0.01
         covariance[1, 1] = 0.01
         covariance[5, 5] = 0.05
         msg.pose.covariance = covariance.flatten().tolist()
         self.initial_pose_pub.publish(msg)
 
-    def try_heading_correction(self, ranges, angles, laser_x, laser_y, laser_theta, current_weight, reason):
-        """
-        Search for a better heading at the current position; publish /initialpose if confident.
-        Returns True if a correction was published.
-        """
+    def try_heading_correction(
+        self, ranges, angles, laser_x, laser_y, laser_theta, current_weight, num_valid_scans, reason
+    ):
         best_theta, best_weight = self.find_best_heading(
-            ranges, angles, laser_x, laser_y, laser_theta
+            ranges, angles, laser_x, laser_y, laser_theta, num_valid_scans
         )
-        delta = abs(np.arctan2(
-            np.sin(best_theta - laser_theta),
-            np.cos(best_theta - laser_theta),
-        ))
-        if delta < self.heading_min_delta:
-            rospy.logdebug(
-                "%s heading check: delta %.3f rad below threshold, no correction",
-                reason, delta,
+        delta = abs(
+            np.arctan2(
+                np.sin(best_theta - laser_theta),
+                np.cos(best_theta - laser_theta),
             )
+        )
+        if delta < self.heading_min_delta:
             return False
         if best_weight <= current_weight * self.heading_weight_ratio:
-            rospy.logdebug(
-                "%s heading check: scan match not better enough (%.4f vs %.4f), no correction",
-                reason, best_weight, current_weight,
-            )
             return False
 
         rospy.loginfo(
             "%s heading correction: delta=%.3f rad, weight %.4f -> %.4f",
-            reason, delta, current_weight, best_weight,
+            reason,
+            delta,
+            current_weight,
+            best_weight,
         )
         self.publish_heading_correction(laser_x, laser_y, best_theta)
         return True
 
+    def _score_window_means(self):
+        """
+        Compare mean of the last 10 scores vs the middle 10 of the history buffer.
+        Requires a full buffer (max_history_length); shorter buffers return None.
+        """
+        n = len(self.weight_history)
+        if n < self.max_history_length:
+            return None, None
+        recent_mean = float(np.mean(self.weight_history[-10:]))
+        old_mean = float(np.mean(self.weight_history[10:-10]))
+        return recent_mean, old_mean
+
     def _publish_scan_match_diagnostics(self, w_norm, recent_mean=None, old_mean=None):
-        """Publish score topics and throttled logs for tuning."""
         self.scan_match_score_pub.publish(Float32(data=float(w_norm)))
         if recent_mean is not None:
             self.scan_match_recent_mean_pub.publish(Float32(data=float(recent_mean)))
@@ -273,10 +417,59 @@ class LocalizationQuality:
         if (now - self._last_diagnostics_log_time).to_sec() < self.diagnostics_log_interval:
             return
         self._last_diagnostics_log_time = now
-        parts = ["scan_match_score=%.4f robot_mode=%d" % (w_norm, self.robot_state)]
+        parts = ['scan_match_score=%.4f robot_mode=%d' % (w_norm, self.robot_state)]
         if recent_mean is not None and old_mean is not None:
-            parts.append("recent_mean=%.4f old_mean=%.4f" % (recent_mean, old_mean))
-        rospy.loginfo("localization_quality: %s", " ".join(parts))
+            parts.append('recent_mean=%.4f old_mean=%.4f' % (recent_mean, old_mean))
+        rospy.loginfo('localization_quality: %s', ' '.join(parts))
+
+    def _trigger_recovery(
+        self, ranges, angles, laser_x, laser_y, laser_theta, current_w, num_valid_scans,
+        recent_mean, old_mean,
+    ):
+        if (rospy.Time.now() - self.last_lost_localization_time).to_sec() < self.recovery_cooldown_sec:
+            return
+
+        self.last_lost_localization_time = rospy.Time.now()
+        rospy.logwarn(
+            'localization_quality: lost localization (recent_mean=%.4f old_mean=%.4f '
+            'drop_factor=%.2f)',
+            recent_mean,
+            old_mean,
+            self.weight_drop_factor,
+        )
+        self.recovery_fired_pub.publish(Bool(data=True))
+
+        result = self.find_best_recovery_pose(
+            ranges, angles, laser_x, laser_y, laser_theta, current_w, num_valid_scans
+        )
+        best_x, best_y, best_th, best_w, source = result
+        required = current_w * self.min_improvement_ratio
+
+        if best_w < required:
+            rospy.logwarn(
+                'localization_quality: no pose beats current score (best=%.4f from %s '
+                'vs current=%.4f, need %.4f); recovery without inject',
+                best_w,
+                source,
+                current_w,
+                required,
+            )
+            self.lost_localization_pub.publish(Bool(data=True))
+            return
+
+        rospy.loginfo(
+            'localization_quality: recovery pose from %s (%.4f -> %.4f) at (%.2f, %.2f, %.2f)',
+            source,
+            current_w,
+            best_w,
+            best_x,
+            best_y,
+            best_th,
+        )
+        self.initial_pose_relocalize_pub.publish(
+            self._make_initial_pose_msg(best_x, best_y, best_th)
+        )
+        self.lost_localization_pub.publish(Bool(data=True))
 
     def scan_callback(self, msg):
         """
@@ -299,176 +492,121 @@ class LocalizationQuality:
         ):
             return
 
-        # Get the LIDAR measurements from the message
-        ranges = np.array(msg.ranges)
-        angle_min = msg.angle_min
-        angle_max = msg.angle_max
-        angle_increment = msg.angle_increment
-        range_min = msg.range_min
-        range_max = 3
+        ranges, angles, num_valid_scans, total_possible = self._preprocess_scan(msg)
+        if num_valid_scans == 0:
+            return
 
-        # Get corresponding angles based on the message data
-        angles = np.arange(angle_min, angle_max, angle_increment)
-
-        # Don't use every measurement to speed up computations
-        ranges = ranges[::self.lidar_measurement_skip]
-        angles = angles[::self.lidar_measurement_skip]
-
-        total_possible_measurements = len(ranges)
-
-        # Only use measurements that are within valid range
-        valid_indx = np.where((ranges < range_max) & (ranges > range_min))
-        if len(valid_indx[0]) < 200: 
-            valid_indx = np.where((ranges < range_max+3) & (ranges > range_min))
-        ranges = ranges[valid_indx]
-        angles = angles[valid_indx]
-
-        num_valid_scans = len(ranges)
-
-        try: 
-            (translation, rotation) = self.trans_listener.lookupTransform(
-                        "/map", "/laser_frame", rospy.Time(0)
-                    )
+        try:
+            translation, rotation = self.trans_listener.lookupTransform(
+                '/map', '/laser_frame', rospy.Time(0)
+            )
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             return
 
         laser_x = translation[0]
         laser_y = translation[1]
         laser_theta = tf.transformations.euler_from_quaternion(rotation)[2]
-
-        # Current Pose of the robot
         current_pose = np.array([[laser_x, laser_y, laser_theta]]).T
 
-        w = self.measurement_model1(ranges, current_pose, angles)
+        w = self._score_pose(
+            ranges, angles, laser_x, laser_y, laser_theta, num_valid_scans
+        )
 
-        # Normalize the weights based on number of valid measurements
-        if total_possible_measurements > 0:
-            w = w / num_valid_scans
-
-        # Store the last 30 locations and weights
         self.location_history.append(current_pose)
         self.weight_history.append(w)
         if len(self.weight_history) > self.max_history_length:
             self.weight_history.pop(0)
-
         if len(self.location_history) > self.max_location_history_length:
             self.location_history.pop(0)
 
-        recent_mean = None
-        old_mean = None
-        if len(self.weight_history) >= 20:
-            recent_mean = float(np.mean(self.weight_history[-10:]))
-            old_mean = float(np.mean(self.weight_history[10:-10]))
+        recent_mean, old_mean = self._score_window_means()
         self._publish_scan_match_diagnostics(w, recent_mean, old_mean)
 
-        # Heading correction while idle: no warmup or weight-history requirement
-        if self.robot_state == 0 and (self.pending_park_heading_fix or not self.made_idle_adjustment):
-            reason = "park" if self.pending_park_heading_fix else "idle"
+        if self.robot_state == 0 and (
+            self.pending_park_heading_fix or not self.made_idle_adjustment
+        ):
+            reason = 'park' if self.pending_park_heading_fix else 'idle'
             self.try_heading_correction(
-                ranges, angles, laser_x, laser_y, laser_theta, w, reason
+                ranges, angles, laser_x, laser_y, laser_theta, w, num_valid_scans, reason
             )
             self.made_idle_adjustment = True
             self.pending_park_heading_fix = False
             return
 
-        # Loss-of-localization monitoring needs time to build a stable weight baseline
         if (rospy.Time.now() - self.localized_start_time).to_sec() < self.localization_warmup_sec:
             return
-
-        # Check if we have lost localization
         if len(self.weight_history) < self.max_history_length:
             return
-        if self.robot_state != 4:  # Only if the robot is in tracking mode should we check for localization loss
+        if self.robot_state != 4:
             return
 
-        # Check if the weights have dropped significantly-compare most recent 10 weights to the average of the last 10
-        recent_weights = self.weight_history[-10:]
-        old_weights = self.weight_history[10:-10]
-        recent_mean = float(np.mean(recent_weights))
-        old_mean = float(np.mean(old_weights))
+        if (
+            rospy.Time.now() - self.track_monitor_start_time
+        ).to_sec() < self.track_monitor_grace_sec:
+            return
+
+        recent_mean, old_mean = self._score_window_means()
+        if recent_mean is None:
+            return
+
         score_drop = recent_mean < self.weight_drop_factor * old_mean
-        score_floor = recent_mean < self.mean_weight_limit
+        score_floor = (
+            self.use_absolute_score_floor
+            and recent_mean < self.mean_weight_limit
+        )
         if not (score_drop or score_floor):
             return
 
-        if (rospy.Time.now() - self.last_lost_localization_time).to_sec() < 15:
-            return
-
-        self.last_lost_localization_time = rospy.Time.now()
-        rospy.logwarn(
-            "localization_quality: lost localization (recent_mean=%.4f old_mean=%.4f "
-            "drop_factor=%.2f floor=%.2f)",
+        self._trigger_recovery(
+            ranges,
+            angles,
+            laser_x,
+            laser_y,
+            laser_theta,
+            w,
+            num_valid_scans,
             recent_mean,
             old_mean,
-            self.weight_drop_factor,
-            self.mean_weight_limit,
-        )
-        self.recovery_fired_pub.publish(Bool(data=True))
-
-        weights = self.measurement_model2(
-            ranges, np.array(self.location_history).squeeze().T, angles
-        )
-        best_index = int(np.argmax(weights))
-        rospy.loginfo(
-            "localization_quality: best history index %d / %d",
-            best_index,
-            len(self.location_history),
         )
 
-        last_good_pose = self.location_history[best_index]
-        last_good_pose_msg = PoseWithCovarianceStamped()
-        last_good_pose_msg.header.stamp = rospy.Time.now()
-        last_good_pose_msg.header.frame_id = "map"
-        last_good_pose_msg.pose.pose.position.x = last_good_pose[0, 0]
-        last_good_pose_msg.pose.pose.position.y = last_good_pose[1, 0]
-        last_good_pose_msg.pose.pose.position.z = 0.0
-        quat = tf.transformations.quaternion_from_euler(0.0, 0.0, last_good_pose[2, 0])
-        last_good_pose_msg.pose.pose.orientation.x = quat[0]
-        last_good_pose_msg.pose.pose.orientation.y = quat[1]
-        last_good_pose_msg.pose.pose.orientation.z = quat[2]
-        last_good_pose_msg.pose.pose.orientation.w = quat[3]
-        covariance = np.zeros((6, 6))
-        covariance[0, 0] = 0.1
-        covariance[1, 1] = 0.1
-        covariance[5, 5] = 3.14
-        last_good_pose_msg.pose.covariance = covariance.flatten().tolist()
-
-        # Inject pose before lost_localization so navigator is still in TRACK.
-        self.initial_pose_relocalize_pub.publish(last_good_pose_msg)
-        self.lost_localization_pub.publish(Bool(data=True))
-        
     def robot_state_callback(self, msg):
         prev_state = self.robot_state
-        # PARK_HEADING (6) -> IDLE (0): schedule heading correction after settle
         if prev_state == 6 and msg.data == 0:
             self.pending_park_heading_fix = True
-            self.park_fix_ready_time = rospy.Time.now() + rospy.Duration(self.park_settle_duration)
+            self.park_fix_ready_time = rospy.Time.now() + rospy.Duration(
+                self.park_settle_duration
+            )
             self.made_idle_adjustment = False
             rospy.loginfo(
-                "Park complete; heading correction scheduled in %.1fs",
+                'Park complete; heading correction scheduled in %.1fs',
                 self.park_settle_duration,
             )
         elif msg.data == 0 and prev_state != 0:
             self.made_idle_adjustment = False
-
+        if prev_state != 4 and msg.data == 4:
+            self.track_monitor_start_time = rospy.Time.now()
+            self.weight_history = []
+            self.location_history = []
+            rospy.loginfo(
+                'localization_quality: TRACK started; score history cleared, '
+                '%.1fs monitor grace',
+                self.track_monitor_grace_sec,
+            )
         self.robot_state = msg.data
 
     def localized_callback(self, msg):
         if not self.localized and msg.data:
-            rospy.loginfo("Robot is localized")
+            rospy.loginfo('Robot is localized')
             self.localized_start_time = rospy.Time.now()
             self.localized = True
             self.made_idle_adjustment = False
 
     def run(self):
-        """
-        The main loop of the node. This function keeps the node running and processing laser scan data.
-        """
         rospy.spin()
+
 
 if __name__ == '__main__':
     try:
-        localization_quality = LocalizationQuality()
-        localization_quality.run()
+        LocalizationQuality().run()
     except rospy.ROSInterruptException:
         pass
