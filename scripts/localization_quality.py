@@ -1,7 +1,7 @@
 import rospy
 import rospkg
 import tf
-from std_msgs.msg import Bool, Int32
+from std_msgs.msg import Bool, Int32, Float32
 from geometry_msgs.msg import Pose2D, PoseWithCovarianceStamped, Twist
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import MapMetaData
@@ -76,6 +76,20 @@ class LocalizationQuality:
         self.initial_pose_relocalize_pub = rospy.Publisher(
             '/initialpose_relocalize', PoseWithCovarianceStamped, queue_size=10
         )
+        self.scan_match_score_pub = rospy.Publisher(
+            '~scan_match_score', Float32, queue_size=1
+        )
+        self.scan_match_recent_mean_pub = rospy.Publisher(
+            '~scan_match_recent_mean', Float32, queue_size=1
+        )
+        self.scan_match_old_mean_pub = rospy.Publisher(
+            '~scan_match_old_mean', Float32, queue_size=1
+        )
+        self.recovery_fired_pub = rospy.Publisher(
+            '~recovery_fired', Bool, queue_size=1, latch=True
+        )
+        self.diagnostics_log_interval = rospy.get_param('~diagnostics_log_interval', 2.0)
+        self._last_diagnostics_log_time = rospy.Time(0)
 
         # Transform listener to get the laser frame
         self.trans_listener = tf.TransformListener()
@@ -245,6 +259,25 @@ class LocalizationQuality:
         self.publish_heading_correction(laser_x, laser_y, best_theta)
         return True
 
+    def _publish_scan_match_diagnostics(self, w_norm, recent_mean=None, old_mean=None):
+        """Publish score topics and throttled logs for tuning."""
+        self.scan_match_score_pub.publish(Float32(data=float(w_norm)))
+        if recent_mean is not None:
+            self.scan_match_recent_mean_pub.publish(Float32(data=float(recent_mean)))
+        if old_mean is not None:
+            self.scan_match_old_mean_pub.publish(Float32(data=float(old_mean)))
+
+        if self.robot_state != 4:
+            return
+        now = rospy.Time.now()
+        if (now - self._last_diagnostics_log_time).to_sec() < self.diagnostics_log_interval:
+            return
+        self._last_diagnostics_log_time = now
+        parts = ["scan_match_score=%.4f robot_mode=%d" % (w_norm, self.robot_state)]
+        if recent_mean is not None and old_mean is not None:
+            parts.append("recent_mean=%.4f old_mean=%.4f" % (recent_mean, old_mean))
+        rospy.loginfo("localization_quality: %s", " ".join(parts))
+
     def scan_callback(self, msg):
         """
         The callback for the laser scan subscriber. This function is called whenever a new laser scan message is
@@ -311,7 +344,6 @@ class LocalizationQuality:
         # Normalize the weights based on number of valid measurements
         if total_possible_measurements > 0:
             w = w / num_valid_scans
-            # print(w)
 
         # Store the last 30 locations and weights
         self.location_history.append(current_pose)
@@ -321,6 +353,13 @@ class LocalizationQuality:
 
         if len(self.location_history) > self.max_location_history_length:
             self.location_history.pop(0)
+
+        recent_mean = None
+        old_mean = None
+        if len(self.weight_history) >= 20:
+            recent_mean = float(np.mean(self.weight_history[-10:]))
+            old_mean = float(np.mean(self.weight_history[10:-10]))
+        self._publish_scan_match_diagnostics(w, recent_mean, old_mean)
 
         # Heading correction while idle: no warmup or weight-history requirement
         if self.robot_state == 0 and (self.pending_park_heading_fix or not self.made_idle_adjustment):
@@ -345,52 +384,58 @@ class LocalizationQuality:
         # Check if the weights have dropped significantly-compare most recent 10 weights to the average of the last 10
         recent_weights = self.weight_history[-10:]
         old_weights = self.weight_history[10:-10]
-        if (np.mean(recent_weights) < self.weight_drop_factor * np.mean(old_weights)) \
-                        or (np.mean(recent_weights) < self.mean_weight_limit):
+        recent_mean = float(np.mean(recent_weights))
+        old_mean = float(np.mean(old_weights))
+        score_drop = recent_mean < self.weight_drop_factor * old_mean
+        score_floor = recent_mean < self.mean_weight_limit
+        if not (score_drop or score_floor):
+            return
 
-            if (rospy.Time.now() - self.last_lost_localization_time).to_sec() < 15:
-                # We have already lost localization recently, so we don't need to do anything
-                return
+        if (rospy.Time.now() - self.last_lost_localization_time).to_sec() < 15:
+            return
 
-            # We lost localization
-            rospy.loginfo("Lost localization")
-            if np.mean(recent_weights) < 1300:
-                rospy.loginfo("    Lost localization due to low weights")
-            self.last_lost_localization_time = rospy.Time.now()
+        self.last_lost_localization_time = rospy.Time.now()
+        rospy.logwarn(
+            "localization_quality: lost localization (recent_mean=%.4f old_mean=%.4f "
+            "drop_factor=%.2f floor=%.2f)",
+            recent_mean,
+            old_mean,
+            self.weight_drop_factor,
+            self.mean_weight_limit,
+        )
+        self.recovery_fired_pub.publish(Bool(data=True))
 
-            # self.localized = False
-            # self.match_with_map = False
-            # self.lost_localization_pub.publish(Bool(data=True))
+        weights = self.measurement_model2(
+            ranges, np.array(self.location_history).squeeze().T, angles
+        )
+        best_index = int(np.argmax(weights))
+        rospy.loginfo(
+            "localization_quality: best history index %d / %d",
+            best_index,
+            len(self.location_history),
+        )
 
-            # Get the pose that best matches the laser scans
-            
-            weights = self.measurement_model2(ranges, np.array(self.location_history).squeeze().T, angles)
-            best_index = np.argmax(weights)
+        last_good_pose = self.location_history[best_index]
+        last_good_pose_msg = PoseWithCovarianceStamped()
+        last_good_pose_msg.header.stamp = rospy.Time.now()
+        last_good_pose_msg.header.frame_id = "map"
+        last_good_pose_msg.pose.pose.position.x = last_good_pose[0, 0]
+        last_good_pose_msg.pose.pose.position.y = last_good_pose[1, 0]
+        last_good_pose_msg.pose.pose.position.z = 0.0
+        quat = tf.transformations.quaternion_from_euler(0.0, 0.0, last_good_pose[2, 0])
+        last_good_pose_msg.pose.pose.orientation.x = quat[0]
+        last_good_pose_msg.pose.pose.orientation.y = quat[1]
+        last_good_pose_msg.pose.pose.orientation.z = quat[2]
+        last_good_pose_msg.pose.pose.orientation.w = quat[3]
+        covariance = np.zeros((6, 6))
+        covariance[0, 0] = 0.1
+        covariance[1, 1] = 0.1
+        covariance[5, 5] = 3.14
+        last_good_pose_msg.pose.covariance = covariance.flatten().tolist()
 
-            print("Best index:", best_index)
-
-            # Now get the last good pose and publish it
-            last_good_pose = self.location_history[best_index]
-            last_good_pose_msg = PoseWithCovarianceStamped()
-            last_good_pose_msg.header.stamp = rospy.Time.now()
-            last_good_pose_msg.header.frame_id = "map"
-            last_good_pose_msg.pose.pose.position.x = last_good_pose[0, 0]
-            last_good_pose_msg.pose.pose.position.y = last_good_pose[1, 0]
-            last_good_pose_msg.pose.pose.position.z = 0.0
-            quat = tf.transformations.quaternion_from_euler(0.0, 0.0, last_good_pose[2, 0])
-            last_good_pose_msg.pose.pose.orientation.x = quat[0]
-            last_good_pose_msg.pose.pose.orientation.y = quat[1]
-            last_good_pose_msg.pose.pose.orientation.z = quat[2]
-            last_good_pose_msg.pose.pose.orientation.w = quat[3]
-            covariance = np.zeros((6, 6))
-            covariance[0, 0] = 0.1  # x variance
-            covariance[1, 1] = 0.1  # y variance
-            covariance[5, 5] = 3.14  # theta variance
-            last_good_pose_msg.pose.covariance = covariance.flatten().tolist()
-
-            self.initial_pose_relocalize_pub.publish(last_good_pose_msg)
-
-        # print(rospy.get_time())
+        # Inject pose before lost_localization so navigator is still in TRACK.
+        self.initial_pose_relocalize_pub.publish(last_good_pose_msg)
+        self.lost_localization_pub.publish(Bool(data=True))
         
     def robot_state_callback(self, msg):
         prev_state = self.robot_state

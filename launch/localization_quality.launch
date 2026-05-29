@@ -8,11 +8,11 @@
     </group>
     <group unless="$(arg tall)">
         <param name="mean_weight_limit" value="1.5"/>
-        <param name="weight_drop_factor" value="0.4"/>
+        <param name="weight_drop_factor" value="0.5"/>
     </group>
 
     <node pkg="mattbot_mcl" type="localization_quality.py" name="localization_quality_node" output="screen">
-        <!-- No parameters needed -->
+        <param name="diagnostics_log_interval" value="2.0"/>
     </node>
 
 </launch>
