@@ -12,16 +12,28 @@ This package implements monte carlo (particle filter) localization (MCL) for the
 > Right now, you must edit the `init_particles()` function in `mc_localization.py` to set coordinates close to the starting point of the mobile robot. Eventually, we will automate this process to make this easier.
 
 ## Map Generation
-To use a map for localization, follow these instructions:
+To use a map for localization:
 
-1) Save the map using map_server: `rosrun map_server map_saver [--occ <threshold_occupied>] [--free <threshold_free>] [-f <mapname>] map:=/your/costmap/topic`
-2) My code requires a second map where the user indicates "off limits" locations. To create this map, upload the .pgm file into GIMP, draw in black anywhere you want to add a new boundary. Save as a new .pgm file with the same map name with with '_mod' appended to the file name.
-3) Move the map files (`<map_name_prefix>.pgm`, `<map_name_prefix>_mod.pgm`, `<map_name_prefix>.yaml`) into the `./maps` directory. 
-4) Create an occupancy grid by running `python3 ./generate_dds_map.py --map_file <map_name_prefix>` within the `./scripts` directory.
+**While mapping** (`sense_and_map.launch` running):
+```bash
+rosrun mattbot_mcl finalize_map.py --name <map_name_prefix>
+```
+This saves `<map_name_prefix>.pgm`/`.yaml` into `./maps`, copies a `_mod.pgm` if missing, and generates the DDS lookup table and JSON.
 
-Now, the occupancy grid for this map will be saved as `./lookup_table/current_map.npy` and can be easily loaded by the MCL script. Additionally, the map is saved as a json in the `./map_json` directory.
+**Auto-save on exit:** `sense_and_map.launch` saves to `autosave` when you Ctrl+C (enabled by default). Disable with `auto_save:=false`, or use a different name with `auto_save_map_name:=scratch`. The `autosave` files are overwritten each session.
 
-If you have an occupancy grid map you want to add, simply use the same name convention but with a '_occ' appended to the .pgm file name.
+**Optional no-go zones:** Edit `<map_name_prefix>_mod.pgm` in GIMP (draw black where the robot should not go), then re-run:
+```bash
+rosrun mattbot_mcl finalize_map.py --name <map_name_prefix> --skip-save
+```
+Or use the lower-level script directly:
+```bash
+python3 ./generate_dds_map.py --map_file <map_name_prefix> --auto-mod --no-plot
+```
+
+**Optional supplemental occupancy:** Add `<map_name_prefix>_occ.pgm` (same naming convention as before).
+
+Artifacts: `./lookup_table/current_map.npy` (MCL) and `./map_json/current_map.json` / `current_map_mod.json` (DDS).
 
 ## Launch
 After creating a 

@@ -6,11 +6,47 @@ import os
 import shutil
 import argparse
 import json
+import sys
+
+import rospkg
+from tf.transformations import euler_from_quaternion
 
 from utils.grids import StochOccupancyGrid2D, DetOccupancyGrid2D
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-MAPS_DIR = os.path.normpath(os.path.join(_SCRIPT_DIR, "..", "maps"))
+_PKG_PATH = rospkg.RosPack().get_path("mattbot_mcl")
+MAPS_DIR = os.path.join(_PKG_PATH, "maps")
+LOOKUP_TABLE_DIR = os.path.join(_PKG_PATH, "lookup_table")
+MAP_JSON_DIR = os.path.join(_PKG_PATH, "map_json")
+
+
+def write_occupancy_grid_to_ros_map(msg, base_path):
+    """Write OccupancyGrid to map_server-style .pgm + .yaml at base_path (no extension)."""
+    info = msg.info
+    w, h = info.width, info.height
+    grid = np.array(msg.data, dtype=np.int8).reshape((h, w))
+    img = np.full((h, w), 205, dtype=np.uint8)
+    img[grid == 0] = 254
+    img[grid >= 50] = 0
+    img = np.flipud(img)
+
+    pgm_path = base_path + ".pgm"
+    with open(pgm_path, "wb") as f:
+        f.write(b"P5\n")
+        f.write(f"# CREATOR: finalize_map.py {info.resolution:.3f} m/pix\n".encode())
+        f.write(f"{w} {h}\n255\n".encode())
+        f.write(img.tobytes())
+
+    q = info.origin.orientation
+    _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
+    yaml_path = base_path + ".yaml"
+    with open(yaml_path, "w", encoding="utf-8") as f:
+        f.write(f"image: {os.path.basename(pgm_path)}\n")
+        f.write(f"resolution: {info.resolution}\n")
+        f.write(f"origin: [{info.origin.position.x}, {info.origin.position.y}, {yaw}]\n")
+        f.write("negate: 0\n")
+        f.write("occupied_thresh: 0.65\n")
+        f.write("free_thresh: 0.196\n")
+    return pgm_path, yaml_path
 
 
 def complete_map_names(maps_dir):
@@ -63,40 +99,42 @@ class MapPreparer:
         topic. The map is represented as a 2D occupancy grid. The map is published periodically at a rate of 1 Hz.
     """
 
-    def __init__(self, map_file):
+    def __init__(self, map_file, *, auto_mod=False, show_plot=True):
         """
         Initializes the MapLoader class
 
         Args:
             map_file: The file containing the map information in yaml format
+            auto_mod: Copy base .pgm to _mod.pgm when mod file is missing
+            show_plot: Show lookup-table plot after generation
         """
         self.map_seq = 0
+        self.auto_mod = auto_mod
+        self.show_plot = show_plot
 
         self.map_data, self.map_metadata = self.load_map(map_file)
         self.resolution = self.map_metadata.resolution
 
-        if os.path.exists('../lookup_table/' + map_file + '.npy'):
+        lookup_path = os.path.join(LOOKUP_TABLE_DIR, map_file + ".npy")
+        current_lookup = os.path.join(LOOKUP_TABLE_DIR, "current_map")
+        if os.path.exists(lookup_path):
             print("Loading Lookup Table...")
-            self.dist_lookup_table = np.load('../lookup_table/' + map_file + '.npy')
-            np.save('../lookup_table/current_map', self.dist_lookup_table)
+            self.dist_lookup_table = np.load(lookup_path)
+            np.save(current_lookup, self.dist_lookup_table)
             print("Lookup Table Loaded")
-            # fig, ax = plt.subplots()
-            # cbar = ax.imshow(self.dist_lookup_table, cmap='hot')
-            # fig.colorbar(cbar)
-            # plt.show()
         else:
             print("Generating Lookup Table...")
-            self.dist_lookup_table =self.generate_dist_lookup_table()
+            self.dist_lookup_table = self.generate_dist_lookup_table()
             self.dist_lookup_table = self.dist_lookup_table.T
             print("Lookup Table Generated")
-            np.save('../lookup_table/' + map_file, self.dist_lookup_table)
+            np.save(lookup_path, self.dist_lookup_table)
+            np.save(current_lookup, self.dist_lookup_table)
 
-            np.save('../lookup_table/current_map', self.dist_lookup_table)
-
-            fig, ax = plt.subplots()
-            cbar = ax.imshow(self.dist_lookup_table, cmap='hot')
-            fig.colorbar(cbar)
-            plt.show()
+            if self.show_plot:
+                fig, ax = plt.subplots()
+                cbar = ax.imshow(self.dist_lookup_table, cmap="hot")
+                fig.colorbar(cbar)
+                plt.show()
 
     def load_map(self, map_file):
         """
@@ -108,7 +146,7 @@ class MapPreparer:
         Returns:
             The map as a 2D occupancy grid
         """
-        with open('../maps/' + map_file + '.yaml', 'r') as f:
+        with open(os.path.join(MAPS_DIR, map_file + ".yaml"), "r") as f:
             map_data = yaml.safe_load(f)
 
         pgm_file = map_data['image']
@@ -117,23 +155,27 @@ class MapPreparer:
         resolution = map_data['resolution']
         origin = map_data['origin']
 
-        base_pgm_path = '../maps/' + pgm_file
-        mod_pgm_path = '../maps/' + pgm_mod_file
+        base_pgm_path = os.path.join(MAPS_DIR, pgm_file)
+        mod_pgm_path = os.path.join(MAPS_DIR, pgm_mod_file)
 
         if not os.path.isfile(base_pgm_path):
             raise FileNotFoundError(f"Base map image not found: {base_pgm_path}")
 
         if not os.path.isfile(mod_pgm_path):
-            print(f"No modified map file found: {mod_pgm_path}")
-            while True:
-                ans = input("Use the original map as the modified map? [y/n]: ").strip().lower()
-                if ans in ("y", "yes"):
-                    shutil.copy2(base_pgm_path, mod_pgm_path)
-                    print(f"Copied {base_pgm_path} -> {mod_pgm_path}")
-                    break
-                if ans in ("n", "no"):
-                    raise SystemExit("Aborted: add a _mod.pgm map or run again and answer y.")
-                print("Please answer y or n.")
+            if self.auto_mod:
+                shutil.copy2(base_pgm_path, mod_pgm_path)
+                print(f"Copied {base_pgm_path} -> {mod_pgm_path}")
+            else:
+                print(f"No modified map file found: {mod_pgm_path}")
+                while True:
+                    ans = input("Use the original map as the modified map? [y/n]: ").strip().lower()
+                    if ans in ("y", "yes"):
+                        shutil.copy2(base_pgm_path, mod_pgm_path)
+                        print(f"Copied {base_pgm_path} -> {mod_pgm_path}")
+                        break
+                    if ans in ("n", "no"):
+                        raise SystemExit("Aborted: add a _mod.pgm map or run again and answer y.")
+                    print("Please answer y or n.")
 
         with open(base_pgm_path, 'rb') as f:
             pgm_data = plt.imread(f)
@@ -181,8 +223,8 @@ class MapPreparer:
         mod_map[mod_loc] = 100
         
 
-        if os.path.exists('../maps/' + pgm_occ_file):
-            with open('../maps/' + pgm_occ_file, 'rb') as f:
+        if os.path.exists(os.path.join(MAPS_DIR, pgm_occ_file)):
+            with open(os.path.join(MAPS_DIR, pgm_occ_file), 'rb') as f:
                 pgm_data_occ = plt.imread(f)
 
             occ_map = np.array(pgm_data_occ).astype(int)
@@ -246,13 +288,13 @@ class MapPreparer:
         mod_data_dict['data'] = map_mod_dict
 
         map_json = json.dumps(data_dict)
-        with open('../map_json/' + map_file + '.json', 'w') as f:
+        with open(os.path.join(MAP_JSON_DIR, map_file + ".json"), "w") as f:
             f.write(map_json)
 
-        with open('../map_json/current_map.json', 'w') as f:
+        with open(os.path.join(MAP_JSON_DIR, "current_map.json"), "w") as f:
             f.write(map_json)
 
-        with open('../map_json/current_map_mod.json', 'w') as f:
+        with open(os.path.join(MAP_JSON_DIR, "current_map_mod.json"), "w") as f:
             f.write(json.dumps(mod_data_dict))
 
         return flattened_map, md_msg
@@ -329,7 +371,18 @@ if __name__ == '__main__':
         help="Map basename (no extension): loads mattbot_mcl/maps/<NAME>.yaml and <NAME>.pgm; <NAME>_mod.pgm optional (prompt to copy from .pgm if missing)",
         default="map_aligned",
     )
+    parser.add_argument(
+        "--auto-mod",
+        action="store_true",
+        help="Copy base .pgm to _mod.pgm when mod file is missing (no prompt)",
+    )
+    parser.add_argument(
+        "--no-plot",
+        action="store_true",
+        help="Skip lookup-table plot after generation",
+    )
     args = parser.parse_args()
     map_file = args.map_file
+    show_plot = sys.stdout.isatty() and not args.no_plot
 
-    map_loader = MapPreparer(map_file)
+    map_loader = MapPreparer(map_file, auto_mod=args.auto_mod, show_plot=show_plot)
