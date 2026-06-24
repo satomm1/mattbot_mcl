@@ -1,2 +1,7 @@
-**/current_map*
 *.pyc
+
+# Generated map artifacts (local/runtime data)
+lookup_table/*.npy
+map_json/*.json
+maps/*.pgm
+maps/*.yaml
