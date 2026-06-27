@@ -97,7 +97,7 @@ class LocalizationQuality:
         self.trans_listener = tf.TransformListener()
 
         rospy.loginfo(
-            "localization_quality: model z_hit=%.3f z_rand=%.3f sigma_hit=%.4f "
+            "[LocalizationQuality] model z_hit=%.3f z_rand=%.3f sigma_hit=%.4f "
             "range_max=%.2f min_improvement=%.2f max_pose_dist=%.2fm",
             self.z_hit,
             self.z_random,
@@ -386,7 +386,7 @@ class LocalizationQuality:
             return False
 
         rospy.loginfo(
-            "%s heading correction: delta=%.3f rad, weight %.4f -> %.4f",
+            "[LocalizationQuality] %s heading correction: delta=%.3f rad, weight %.4f -> %.4f",
             reason,
             delta,
             current_weight,
@@ -583,7 +583,7 @@ class LocalizationQuality:
             )
             self.made_idle_adjustment = False
             rospy.loginfo(
-                'Park complete; heading correction scheduled in %.1fs',
+                '[LocalizationQuality] Park complete; heading correction scheduled in %.1fs',
                 self.park_settle_duration,
             )
         elif msg.data == 0 and prev_state != 0:
@@ -592,16 +592,17 @@ class LocalizationQuality:
             self.track_monitor_start_time = rospy.Time.now()
             self.weight_history = []
             self.location_history = []
-            rospy.loginfo(
-                'localization_quality: TRACK started; score history cleared, '
-                '%.1fs monitor grace',
-                self.track_monitor_grace_sec,
-            )
+            if self.log_scan_match_diagnostics:
+                rospy.loginfo(
+                    '[LocalizationQuality] TRACK started; score history cleared, '
+                    '%.1fs monitor grace',
+                    self.track_monitor_grace_sec,
+                )
         self.robot_state = msg.data
 
     def localized_callback(self, msg):
         if not self.localized and msg.data:
-            rospy.loginfo('Robot is localized')
+            rospy.loginfo('[LocalizationQuality] Robot is localized')
             self.localized_start_time = rospy.Time.now()
             self.localized = True
             self.made_idle_adjustment = False
