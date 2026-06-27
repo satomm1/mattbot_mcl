@@ -12,6 +12,8 @@
     </group>
 
     <node pkg="mattbot_mcl" type="localization_quality.py" name="localization_quality_node" output="screen">
+        <!-- Periodic TRACK-mode scan score lines on screen; scores still publish on ~scan_match_* topics -->
+        <param name="log_scan_match_diagnostics" value="false"/>
         <param name="diagnostics_log_interval" value="2.0"/>
         <!-- Relative drop is primary; set use_absolute_score_floor true to also use mean_weight_limit -->
         <param name="use_absolute_score_floor" value="false"/>

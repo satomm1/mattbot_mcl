@@ -89,6 +89,9 @@ class LocalizationQuality:
             '~recovery_fired', Bool, queue_size=1, latch=True
         )
         self.diagnostics_log_interval = rospy.get_param('~diagnostics_log_interval', 2.0)
+        self.log_scan_match_diagnostics = rospy.get_param(
+            '~log_scan_match_diagnostics', False
+        )
         self._last_diagnostics_log_time = rospy.Time(0)
 
         self.trans_listener = tf.TransformListener()
@@ -411,6 +414,8 @@ class LocalizationQuality:
         if old_mean is not None:
             self.scan_match_old_mean_pub.publish(Float32(data=float(old_mean)))
 
+        if not self.log_scan_match_diagnostics:
+            return
         if self.robot_state != 4:
             return
         now = rospy.Time.now()
