@@ -9,6 +9,7 @@ from nav_msgs.msg import MapMetaData
 import numpy as np
 
 LIDAR_MAX_RANGE = 16
+ROBOT_MODE_TRACK = 4
 
 
 class LocalizationQuality:
@@ -55,6 +56,15 @@ class LocalizationQuality:
         self.localized_laser_range_max = rospy.get_param(
             '~localized_laser_range_max', 3.0
         )
+        self.pose_jump_detection_enabled = rospy.get_param(
+            '~pose_jump_detection_enabled', True
+        )
+        self.max_pose_jump_m = rospy.get_param('~max_pose_jump_m', 1.0)
+        self.max_pose_jump_theta = rospy.get_param('~max_pose_jump_theta', 0.5)
+        self.post_recovery_jump_grace_sec = rospy.get_param(
+            '~post_recovery_jump_grace_sec', 2.0
+        )
+        self.post_recovery_jump_grace_until = rospy.Time(0)
 
         self.last_lost_localization_time = rospy.Time.now()
 
@@ -98,13 +108,17 @@ class LocalizationQuality:
 
         rospy.loginfo(
             "[LocalizationQuality] model z_hit=%.3f z_rand=%.3f sigma_hit=%.4f "
-            "range_max=%.2f min_improvement=%.2f max_pose_dist=%.2fm",
+            "range_max=%.2f min_improvement=%.2f max_pose_dist=%.2fm "
+            "pose_jump=%s max_jump=%.2fm/%.2frad",
             self.z_hit,
             self.z_random,
             self.sigma_hit,
             self.localized_laser_range_max,
             self.min_improvement_ratio,
             self.max_recovery_pose_distance,
+            self.pose_jump_detection_enabled,
+            self.max_pose_jump_m,
+            self.max_pose_jump_theta,
         )
 
     def _load_measurement_model_params(self):
@@ -395,6 +409,79 @@ class LocalizationQuality:
         self.publish_heading_correction(laser_x, laser_y, best_theta)
         return True
 
+    @staticmethod
+    def _pose_delta(prev_pose, x, y, theta):
+        px = float(prev_pose[0, 0])
+        py = float(prev_pose[1, 0])
+        pth = float(prev_pose[2, 0])
+        delta_xy = float(np.hypot(x - px, y - py))
+        delta_theta = abs(
+            np.arctan2(
+                np.sin(theta - pth),
+                np.cos(theta - pth),
+            )
+        )
+        return delta_xy, delta_theta
+
+    def _localization_warmup_active(self):
+        return (
+            rospy.Time.now() - self.localized_start_time
+        ).to_sec() < self.localization_warmup_sec
+
+    def _track_monitor_grace_active(self):
+        return (
+            rospy.Time.now() - self.track_monitor_start_time
+        ).to_sec() < self.track_monitor_grace_sec
+
+    def _post_recovery_jump_grace_active(self):
+        return rospy.Time.now() < self.post_recovery_jump_grace_until
+
+    def _recovery_cooldown_active(self):
+        return (
+            rospy.Time.now() - self.last_lost_localization_time
+        ).to_sec() < self.recovery_cooldown_sec
+
+    def _mark_recovery_fired(self):
+        now = rospy.Time.now()
+        self.last_lost_localization_time = now
+        self.post_recovery_jump_grace_until = now + rospy.Duration(
+            self.post_recovery_jump_grace_sec
+        )
+
+    def _append_track_history(self, pose, weight):
+        self.location_history.append(pose)
+        self.weight_history.append(weight)
+        if len(self.weight_history) > self.max_history_length:
+            self.weight_history.pop(0)
+        if len(self.location_history) > self.max_location_history_length:
+            self.location_history.pop(0)
+
+    def _trigger_jump_recovery(
+        self, last_pose, bad_x, bad_y, bad_theta, delta_xy, delta_theta
+    ):
+        last_x = float(last_pose[0, 0])
+        last_y = float(last_pose[1, 0])
+        last_theta = float(last_pose[2, 0])
+
+        self._mark_recovery_fired()
+        rospy.logwarn(
+            'localization_quality: pose jump detected (delta_xy=%.2fm dtheta=%.3f rad) '
+            'bad=(%.2f, %.2f, %.2f) injecting last good (%.2f, %.2f, %.2f)',
+            delta_xy,
+            delta_theta,
+            bad_x,
+            bad_y,
+            bad_theta,
+            last_x,
+            last_y,
+            last_theta,
+        )
+        self.recovery_fired_pub.publish(Bool(data=True))
+        self.initial_pose_relocalize_pub.publish(
+            self._make_initial_pose_msg(last_x, last_y, last_theta)
+        )
+        self.lost_localization_pub.publish(Bool(data=True))
+
     def _score_window_means(self):
         """
         Compare mean of the last 10 scores vs the middle 10 of the history buffer.
@@ -416,7 +503,7 @@ class LocalizationQuality:
 
         if not self.log_scan_match_diagnostics:
             return
-        if self.robot_state != 4:
+        if self.robot_state != ROBOT_MODE_TRACK:
             return
         now = rospy.Time.now()
         if (now - self._last_diagnostics_log_time).to_sec() < self.diagnostics_log_interval:
@@ -431,10 +518,10 @@ class LocalizationQuality:
         self, ranges, angles, laser_x, laser_y, laser_theta, current_w, num_valid_scans,
         recent_mean, old_mean,
     ):
-        if (rospy.Time.now() - self.last_lost_localization_time).to_sec() < self.recovery_cooldown_sec:
+        if self._recovery_cooldown_active():
             return
 
-        self.last_lost_localization_time = rospy.Time.now()
+        self._mark_recovery_fired()
         rospy.logwarn(
             'localization_quality: lost localization (recent_mean=%.4f old_mean=%.4f '
             'drop_factor=%.2f)',
@@ -517,16 +604,6 @@ class LocalizationQuality:
             ranges, angles, laser_x, laser_y, laser_theta, num_valid_scans
         )
 
-        self.location_history.append(current_pose)
-        self.weight_history.append(w)
-        if len(self.weight_history) > self.max_history_length:
-            self.weight_history.pop(0)
-        if len(self.location_history) > self.max_location_history_length:
-            self.location_history.pop(0)
-
-        recent_mean, old_mean = self._score_window_means()
-        self._publish_scan_match_diagnostics(w, recent_mean, old_mean)
-
         if self.robot_state == 0 and (
             self.pending_park_heading_fix or not self.made_idle_adjustment
         ):
@@ -538,19 +615,55 @@ class LocalizationQuality:
             self.pending_park_heading_fix = False
             return
 
-        if (rospy.Time.now() - self.localized_start_time).to_sec() < self.localization_warmup_sec:
+        if self.robot_state != ROBOT_MODE_TRACK:
+            self._publish_scan_match_diagnostics(w, None, None)
+            return
+
+        if self.pose_jump_detection_enabled and len(self.location_history) > 0:
+            delta_xy, delta_theta = self._pose_delta(
+                self.location_history[-1], laser_x, laser_y, laser_theta
+            )
+            pose_jump = (
+                delta_xy > self.max_pose_jump_m
+                or delta_theta > self.max_pose_jump_theta
+            )
+            if pose_jump:
+                can_recover = (
+                    not self._localization_warmup_active()
+                    and not self._track_monitor_grace_active()
+                    and not self._post_recovery_jump_grace_active()
+                    and not self._recovery_cooldown_active()
+                )
+                if can_recover:
+                    self._trigger_jump_recovery(
+                        self.location_history[-1],
+                        laser_x,
+                        laser_y,
+                        laser_theta,
+                        delta_xy,
+                        delta_theta,
+                    )
+                else:
+                    rospy.logwarn(
+                        'localization_quality: pose jump detected '
+                        '(delta_xy=%.2fm dtheta=%.3f rad) but recovery suppressed '
+                        '(warmup/grace/cooldown)',
+                        delta_xy,
+                        delta_theta,
+                    )
+                return
+
+        self._append_track_history(current_pose, w)
+        recent_mean, old_mean = self._score_window_means()
+        self._publish_scan_match_diagnostics(w, recent_mean, old_mean)
+
+        if self._localization_warmup_active():
             return
         if len(self.weight_history) < self.max_history_length:
             return
-        if self.robot_state != 4:
+        if self._track_monitor_grace_active():
             return
 
-        if (
-            rospy.Time.now() - self.track_monitor_start_time
-        ).to_sec() < self.track_monitor_grace_sec:
-            return
-
-        recent_mean, old_mean = self._score_window_means()
         if recent_mean is None:
             return
 
@@ -588,7 +701,7 @@ class LocalizationQuality:
             )
         elif msg.data == 0 and prev_state != 0:
             self.made_idle_adjustment = False
-        if prev_state != 4 and msg.data == 4:
+        if prev_state != ROBOT_MODE_TRACK and msg.data == ROBOT_MODE_TRACK:
             self.track_monitor_start_time = rospy.Time.now()
             self.weight_history = []
             self.location_history = []

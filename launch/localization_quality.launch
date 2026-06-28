@@ -26,6 +26,11 @@
         <param name="localized_laser_range_max" value="3.0"/>
         <!-- Skip loss detection briefly after ALIGN->TRACK (avoids false recovery) -->
         <param name="track_monitor_grace_sec" value="1.0"/>
+        <!-- Reject implausible AMCL jumps during TRACK; inject last good history pose -->
+        <param name="pose_jump_detection_enabled" value="true"/>
+        <param name="max_pose_jump_m" value="0.5"/>
+        <param name="max_pose_jump_theta" value="0.5"/>
+        <param name="post_recovery_jump_grace_sec" value="2.0"/>
     </node>
 
 </launch>
