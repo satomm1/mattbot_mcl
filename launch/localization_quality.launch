@@ -7,8 +7,8 @@
         <param name="weight_drop_factor" value="0.6"/>
     </group>
     <group unless="$(arg tall)">
-        <param name="mean_weight_limit" value="1.5"/>
-        <param name="weight_drop_factor" value="0.5"/>
+        <param name="mean_weight_limit" value="2.0"/>
+        <param name="weight_drop_factor" value="0.6"/>
     </group>
 
     <node pkg="mattbot_mcl" type="localization_quality.py" name="localization_quality_node" output="screen">
