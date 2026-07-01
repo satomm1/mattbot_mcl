@@ -32,7 +32,7 @@
         <param name="max_pose_jump_theta" value="0.5"/>
         <param name="post_recovery_jump_grace_sec" value="2.0"/>
 
-        <-- Improved Relocalization Parameters -->
+        <!-- Improved Relocalization Parameters -->
         <!-- inject after backing -->
         <param name="recovery_anchor_radius" value="5.0"/>
         <param name="recovery_orientation_delta" value="0.35"/>
