@@ -31,6 +31,22 @@
         <param name="max_pose_jump_m" value="0.5"/>
         <param name="max_pose_jump_theta" value="0.5"/>
         <param name="post_recovery_jump_grace_sec" value="2.0"/>
+
+        <-- Improved Relocalization Parameters -->
+        <!-- inject after backing -->
+        <param name="recovery_anchor_radius" value="5.0"/>
+        <param name="recovery_orientation_delta" value="0.35"/>
+        <param name="recovery_orientation_count" value="3"/>
+        <param name="recovery_search_verbose" value="true"/>
+        <param name="post_backing_settle_sec" value="0.3"/>
+        <!--  validate before replan -->
+        <param name="validation_scan_count" value="3"/>
+        <param name="validation_score_floor" value="1.5"/>
+        <param name="validation_score_ratio" value="0.75"/>
+        <param name="max_acceptance_from_anchor" value="2.0"/>
+        <param name="validation_max_position_std" value="0.15"/>
+        <param name="validation_max_yaw_std" value="0.2"/>
+        <param name="max_recovery_attempts" value="2"/>
     </node>
 
 </launch>
