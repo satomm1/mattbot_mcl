@@ -1,6 +1,8 @@
 <launch>
 
     <arg name="tall" default="false"/>
+    <arg name="max_pose_jump_m" default="0.5"/>
+    <arg name="max_pose_jump_theta" default="0.5"/>
 
     <group if="$(arg tall)">
         <param name="mean_weight_limit" value="2.0"/>
@@ -28,8 +30,8 @@
         <param name="track_monitor_grace_sec" value="1.0"/>
         <!-- Reject implausible AMCL jumps during TRACK; inject last good history pose -->
         <param name="pose_jump_detection_enabled" value="true"/>
-        <param name="max_pose_jump_m" value="0.5"/>
-        <param name="max_pose_jump_theta" value="0.5"/>
+        <param name="max_pose_jump_m" value="$(arg max_pose_jump_m)"/>
+        <param name="max_pose_jump_theta" value="$(arg max_pose_jump_theta)"/>
         <param name="post_recovery_jump_grace_sec" value="2.0"/>
 
         <!-- Improved Relocalization Parameters -->
