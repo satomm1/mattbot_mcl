@@ -4,23 +4,16 @@
     <arg name="max_pose_jump_m" default="0.5"/>
     <arg name="max_pose_jump_theta" default="0.5"/>
 
-    <group if="$(arg tall)">
-        <param name="mean_weight_limit" value="2.0"/>
-        <param name="weight_drop_factor" value="0.6"/>
-    </group>
-    <group unless="$(arg tall)">
-        <param name="mean_weight_limit" value="2.0"/>
-        <param name="weight_drop_factor" value="0.6"/>
-    </group>
-
     <node pkg="mattbot_mcl" type="localization_quality.py" name="localization_quality_node" output="screen">
         <!-- Periodic TRACK-mode scan score lines on screen; scores still publish on ~scan_match_* topics -->
         <param name="log_scan_match_diagnostics" value="false"/>
         <param name="diagnostics_log_interval" value="2.0"/>
-        <!-- Relative drop is primary; set use_absolute_score_floor true to also use mean_weight_limit -->
+        <!-- Lost localization: mean of the newest 10 scan scores < weight_drop_factor x the 10 before.
+             Set use_absolute_score_floor true to also flag a mean below mean_weight_limit. -->
+        <param name="weight_drop_factor" value="0.6"/>
         <param name="use_absolute_score_floor" value="false"/>
+        <param name="mean_weight_limit" value="2.0"/>
         <param name="min_improvement_ratio" value="1.15"/>
-        <param name="max_recovery_pose_distance" value="3.0"/>
         <param name="recovery_history_length" value="20"/>
         <param name="local_search_radius" value="0.2"/>
         <param name="local_search_step" value="0.2"/>
@@ -28,19 +21,28 @@
         <param name="localized_laser_range_max" value="3.0"/>
         <!-- Skip loss detection briefly after ALIGN->TRACK (avoids false recovery) -->
         <param name="track_monitor_grace_sec" value="1.0"/>
-        <!-- Reject implausible AMCL jumps during TRACK; inject last good history pose -->
+        <!-- AMCL jump during TRACK: a map->odom correction above these limits; recovery restores the
+             last good pose carried forward by odometry -->
         <param name="pose_jump_detection_enabled" value="true"/>
         <param name="max_pose_jump_m" value="$(arg max_pose_jump_m)"/>
         <param name="max_pose_jump_theta" value="$(arg max_pose_jump_theta)"/>
         <param name="post_recovery_jump_grace_sec" value="2.0"/>
 
-        <!-- Improved Relocalization Parameters -->
-        <!-- inject after backing -->
+        <!-- Recovery pose search (POSE_REFINE): coarse grid around the last trusted pose carried forward by
+             odometry, then a fine xy x yaw refinement; injected into AMCL with the covariance below -->
         <param name="recovery_anchor_radius" value="5.0"/>
         <param name="recovery_orientation_delta" value="0.35"/>
         <param name="recovery_orientation_count" value="3"/>
+        <param name="refine_xy_radius" value="0.1"/>
+        <param name="refine_xy_step" value="0.05"/>
+        <param name="refine_yaw_radius" value="0.2"/>
+        <param name="refine_yaw_step" value="0.025"/>
         <param name="recovery_search_verbose" value="true"/>
         <param name="post_backing_settle_sec" value="0.3"/>
+        <param name="refine_max_wait_sec" value="1.0"/>
+        <!-- Injected pose std (m, rad). Tight enough that AMCL keeps the heading: no spin needed to find it -->
+        <param name="recovery_inject_xy_std" value="0.15"/>
+        <param name="recovery_inject_yaw_std" value="0.2"/>
         <!--  validate before replan (after the stationary AMCL updates) -->
         <param name="validation_scan_count" value="3"/>
         <param name="validation_score_floor" value="1.5"/>
@@ -54,6 +56,9 @@
         <param name="validation_max_position_std" value="0.25"/>
         <param name="validation_max_yaw_std" value="0.25"/>
         <param name="validation_settle_timeout_sec" value="1.5"/>
+        <!-- Relocalize spin (only after a failed stationary validation): this many passing scans in a row
+             end the spin early -->
+        <param name="spin_validation_scans" value="5"/>
 
         <!-- Stationary AMCL updates: once /odom shows the robot at rest, call request_nomotion_update
              rest_update_count times so AMCL refines from still scans (it does not update while stopped,
@@ -67,7 +72,6 @@
         <param name="heading_weight_ratio" value="1.25"/>
         <param name="heading_min_delta" value="0.05"/>
         <param name="heading_fix_max_wait_sec" value="2.0"/>
-        <param name="max_recovery_attempts" value="2"/>
     </node>
 
 </launch>
