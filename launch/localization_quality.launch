@@ -40,8 +40,7 @@
         <param name="recovery_orientation_delta" value="0.35"/>
         <param name="recovery_orientation_count" value="3"/>
         <param name="recovery_search_verbose" value="true"/>
-        <!-- 0.5 s: with the navigator's command smoother the robot takes ~0.4 s to stop after backing -->
-        <param name="post_backing_settle_sec" value="0.5"/>
+        <param name="post_backing_settle_sec" value="0.3"/>
         <!--  validate before replan (after the stationary AMCL updates) -->
         <param name="validation_scan_count" value="3"/>
         <param name="validation_score_floor" value="1.5"/>
