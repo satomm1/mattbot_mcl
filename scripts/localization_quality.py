@@ -1,15 +1,20 @@
+import threading
+
 import rospy
 import rospkg
 import tf
 from std_msgs.msg import Bool, Int32, Float32
+from std_srvs.srv import Empty
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from sensor_msgs.msg import LaserScan
-from nav_msgs.msg import MapMetaData
+from nav_msgs.msg import MapMetaData, Odometry
 
 import numpy as np
 
 LIDAR_MAX_RANGE = 16
+ROBOT_MODE_IDLE = 0
 ROBOT_MODE_TRACK = 4
+ROBOT_MODE_PARK_HEADING = 6
 ROBOT_MODE_POSE_REFINE = 13
 ROBOT_MODE_RECOVERY_VALIDATE = 14
 
@@ -41,7 +46,12 @@ class LocalizationQuality:
             '~recovery_history_length', 20
         )
         self.location_history = []
+        # odom -> laser_frame pose for each location_history entry (None if the lookup failed);
+        # carries an old map pose forward to now: anchor (+) (odom_then^-1 (+) odom_now)
+        self.odom_history = []
         self.weight_history = []
+        # scan_callback and robot_state_callback run on different rospy threads and share the histories
+        self._lock = threading.RLock()
 
         self.weight_drop_factor = rospy.get_param('/weight_drop_factor', 0.5)
         self.use_absolute_score_floor = rospy.get_param(
@@ -86,15 +96,41 @@ class LocalizationQuality:
         self.max_acceptance_from_anchor = rospy.get_param(
             '~max_acceptance_from_anchor', 2.0
         )
+        # Limits on AMCL's own covariance (/amcl_pose) after the post-spin stationary updates
         self.validation_max_position_std = rospy.get_param(
-            '~validation_max_position_std', 0.15
+            '~validation_max_position_std', 0.25
         )
-        self.validation_max_yaw_std = rospy.get_param('~validation_max_yaw_std', 0.2)
+        self.validation_max_yaw_std = rospy.get_param('~validation_max_yaw_std', 0.25)
+        # Heading vs the anchor carried forward by odometry (catches 180 deg flips); <= 0 disables
+        self.validation_max_yaw_from_anchor = rospy.get_param(
+            '~validation_max_yaw_from_anchor', 0.8
+        )
+        # Start validating at most this long after entering RECOVERY_VALIDATE, even if the
+        # stationary AMCL updates have not finished (the navigator times out at 3 s)
+        self.validation_settle_timeout_sec = rospy.get_param(
+            '~validation_settle_timeout_sec', 1.5
+        )
+
+        # Stationary AMCL updates: AMCL only updates after update_min_d / update_min_a of motion, so
+        # its pose after a spin comes from scans taken while rotating. Once /odom shows the robot at
+        # rest, call request_nomotion_update a few times so AMCL refines from still scans.
+        self.rest_updates_enabled = rospy.get_param('~rest_updates_enabled', True)
+        self.rest_linear_threshold = rospy.get_param('~rest_linear_threshold', 0.02)
+        self.rest_angular_threshold = rospy.get_param('~rest_angular_threshold', 0.05)
+        self.rest_settle_sec = rospy.get_param('~rest_settle_sec', 0.25)
+        self.rest_update_count = int(rospy.get_param('~rest_update_count', 3))
+        self.rest_update_spacing_sec = rospy.get_param('~rest_update_spacing_sec', 0.12)
+        self.nomotion_service_name = rospy.get_param(
+            '~nomotion_service', '/request_nomotion_update'
+        )
+        # Idle / park heading correction waits this long at most for the stationary updates
+        self.heading_fix_max_wait_sec = rospy.get_param('~heading_fix_max_wait_sec', 2.0)
 
         self.recovery_active = False
         self.recovery_anchor = None
+        self.recovery_anchor_odom = None
         self.recovery_history_snapshot = []
-        self.pre_loss_recent_mean = None
+        self.pre_loss_reference = None
         self.pose_refine_done = False
         self.pose_refine_enter_time = rospy.Time(0)
         self.validation_scores = []
@@ -145,6 +181,27 @@ class LocalizationQuality:
 
         self.trans_listener = tf.TransformListener()
 
+        self.idle_enter_time = rospy.Time(0)
+        self.validation_start_time = None
+
+        # Latest /amcl_pose (pose + covariance of the whole particle set) and when it arrived
+        self.last_amcl_pose = None
+        self.last_amcl_pose_rx = rospy.Time(0)
+        rospy.Subscriber('/amcl_pose', PoseWithCovarianceStamped, self.amcl_pose_callback, queue_size=5)
+
+        # Rest detector state (read and written only by the odom callback and the rest timer)
+        self._odom_twist = None          # (v, w, receive time)
+        self._last_motion_time = rospy.Time(0)
+        self._motion_since_rest = False
+        self._rest_updates_remaining = 0
+        self._next_rest_update_time = rospy.Time(0)
+        self._rest_batch_done_time = rospy.Time(0)
+        self._nomotion_srv = rospy.ServiceProxy(self.nomotion_service_name, Empty)
+        self._nomotion_warned = False
+        rospy.Subscriber('/odom', Odometry, self.odom_callback, queue_size=10)
+        if self.rest_updates_enabled:
+            self._rest_timer = rospy.Timer(rospy.Duration(0.05), self._rest_timer_callback)
+
         rospy.loginfo(
             "[LocalizationQuality] model z_hit=%.3f z_rand=%.3f sigma_hit=%.4f "
             "range_max=%.2f min_improvement=%.2f max_pose_dist=%.2fm "
@@ -159,6 +216,105 @@ class LocalizationQuality:
             self.max_pose_jump_m,
             self.max_pose_jump_theta,
         )
+
+    # ------------------------------------------------------------------
+    # Stationary AMCL updates (request_nomotion_update once the robot is at rest)
+    # ------------------------------------------------------------------
+    def odom_callback(self, msg):
+        self._odom_twist = (
+            float(msg.twist.twist.linear.x),
+            float(msg.twist.twist.angular.z),
+            rospy.Time.now(),
+        )
+
+    def amcl_pose_callback(self, msg):
+        self.last_amcl_pose = msg
+        self.last_amcl_pose_rx = rospy.Time.now()
+
+    def _rest_timer_callback(self, _event):
+        twist = self._odom_twist
+        if twist is None:
+            return
+        v, w, rx = twist
+        now = rospy.Time.now()
+        if (now - rx).to_sec() > 0.5:
+            return  # no fresh odometry: do not guess
+        moving = abs(v) > self.rest_linear_threshold or abs(w) > self.rest_angular_threshold
+        if moving:
+            self._last_motion_time = now
+            self._motion_since_rest = True
+            self._rest_updates_remaining = 0  # moving again: drop any unfinished batch
+            return
+        if (
+            self._motion_since_rest
+            and (now - self._last_motion_time).to_sec() >= self.rest_settle_sec
+        ):
+            self._motion_since_rest = False
+            self._rest_updates_remaining = max(0, self.rest_update_count)
+            self._next_rest_update_time = now
+        if self._rest_updates_remaining > 0 and now >= self._next_rest_update_time:
+            self._call_nomotion_update()
+            self._rest_updates_remaining -= 1
+            self._next_rest_update_time = now + rospy.Duration(self.rest_update_spacing_sec)
+            if self._rest_updates_remaining == 0:
+                # AMCL applies the request on its next scan; allow one spacing for it to land
+                self._rest_batch_done_time = self._next_rest_update_time
+
+    def _call_nomotion_update(self):
+        try:
+            self._nomotion_srv()
+        except (rospy.ServiceException, rospy.ROSException) as exc:
+            if not self._nomotion_warned:
+                rospy.logwarn(
+                    '[LocalizationQuality] %s unavailable (%s); stationary AMCL updates skipped',
+                    self.nomotion_service_name, exc,
+                )
+                self._nomotion_warned = True
+
+    def _rest_settled(self):
+        """True once the robot is at rest and the stationary AMCL updates for this stop are done."""
+        if not self.rest_updates_enabled:
+            return True
+        twist = self._odom_twist
+        if twist is None:
+            return True  # no odometry: nothing to wait for
+        if self._motion_since_rest or self._rest_updates_remaining > 0:
+            return False
+        v, w, _ = twist
+        if abs(v) > self.rest_linear_threshold or abs(w) > self.rest_angular_threshold:
+            return False
+        return rospy.Time.now() >= self._rest_batch_done_time
+
+    # ------------------------------------------------------------------
+    # SE(2) helpers: carry an old map-frame pose forward by odometry
+    # ------------------------------------------------------------------
+    def _lookup_odom_pose(self):
+        """odom -> laser_frame as a 3x1 array, or None."""
+        try:
+            trans, rot = self.trans_listener.lookupTransform('/odom', '/laser_frame', rospy.Time(0))
+        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+            return None
+        yaw = tf.transformations.euler_from_quaternion(rot)[2]
+        return np.array([[trans[0]], [trans[1]], [yaw]])
+
+    @staticmethod
+    def _propagate_pose(map_pose, odom_then, odom_now):
+        """map_pose (+) (odom_then^-1 (+) odom_now); returns map_pose unchanged if odom is missing."""
+        if odom_then is None or odom_now is None:
+            return np.array(map_pose, copy=True)
+        ox, oy, oth = float(odom_then[0, 0]), float(odom_then[1, 0]), float(odom_then[2, 0])
+        nx, ny, nth = float(odom_now[0, 0]), float(odom_now[1, 0]), float(odom_now[2, 0])
+        c, s = np.cos(oth), np.sin(oth)
+        dx_w, dy_w = nx - ox, ny - oy
+        rel_x = c * dx_w + s * dy_w
+        rel_y = -s * dx_w + c * dy_w
+        rel_th = nth - oth
+        mx, my, mth = float(map_pose[0, 0]), float(map_pose[1, 0]), float(map_pose[2, 0])
+        cm, sm = np.cos(mth), np.sin(mth)
+        px = mx + cm * rel_x - sm * rel_y
+        py = my + sm * rel_x + cm * rel_y
+        pth = np.arctan2(np.sin(mth + rel_th), np.cos(mth + rel_th))
+        return np.array([[px], [py], [pth]])
 
     def _load_measurement_model_params(self):
         """Match AMCL / navigator laser params when available."""
@@ -479,11 +635,18 @@ class LocalizationQuality:
         )
         rospy.loginfo('\n'.join(lines))
 
-    def _begin_recovery_session(self, anchor_pose, pre_loss_recent_mean=None):
+    def _begin_recovery_session(self, anchor_pose, anchor_odom=None, pre_loss_reference=None):
+        """
+        anchor_pose: last trusted map-frame laser pose; anchor_odom: odom pose at that moment.
+        pre_loss_reference: healthy scan-match score from before the loss (validation compares to it).
+        """
         self.recovery_active = True
         self.recovery_anchor = np.array(anchor_pose, copy=True)
+        self.recovery_anchor_odom = (
+            None if anchor_odom is None else np.array(anchor_odom, copy=True)
+        )
         self.recovery_history_snapshot = list(self.location_history)
-        self.pre_loss_recent_mean = pre_loss_recent_mean
+        self.pre_loss_reference = pre_loss_reference
         self.pose_refine_done = False
         self.validation_scores = []
         self.validation_poses = []
@@ -493,8 +656,9 @@ class LocalizationQuality:
     def _end_recovery_session(self):
         self.recovery_active = False
         self.recovery_anchor = None
+        self.recovery_anchor_odom = None
         self.recovery_history_snapshot = []
-        self.pre_loss_recent_mean = None
+        self.pre_loss_reference = None
         self.validation_scores = []
         self.validation_poses = []
         self.validation_done = False
@@ -513,17 +677,26 @@ class LocalizationQuality:
         ):
             return
 
+        odom_now = self._lookup_odom_pose()
+        history = []
         if self.recovery_active and self.recovery_anchor is not None:
             anchor = self.recovery_anchor
+            anchor_odom = self.recovery_anchor_odom
             history = self.recovery_history_snapshot
         elif self.location_history:
             anchor = self.location_history[-1]
+            anchor_odom = self.odom_history[-1]
             history = list(self.location_history)
         else:
             anchor = np.array([[laser_x], [laser_y], [laser_theta]])
+            anchor_odom = odom_now
 
         # Keep anchor for post-spin validation (waypoint backing has no prior session).
         self.recovery_anchor = np.array(anchor, copy=True)
+        self.recovery_anchor_odom = None if anchor_odom is None else np.array(anchor_odom, copy=True)
+
+        # Search around the anchor carried forward by odometry (the robot has backed up since)
+        search_anchor = self._propagate_pose(anchor, anchor_odom, odom_now)
 
         best, current_w = self.find_best_recovery_pose_anchored(
             ranges,
@@ -531,7 +704,7 @@ class LocalizationQuality:
             laser_x,
             laser_y,
             laser_theta,
-            anchor,
+            search_anchor,
             history,
             num_valid_scans,
         )
@@ -560,13 +733,35 @@ class LocalizationQuality:
     def _handle_recovery_validate(
         self, ranges, angles, laser_x, laser_y, laser_theta, num_valid_scans,
     ):
-        """Accumulate scans after relocalize spin; publish pass/fail when window full."""
+        """
+        After the relocalize spin: wait for the stationary AMCL updates, score a few still scans,
+        then publish pass/fail. Pass needs all of:
+          - scan match: mean >= validation_score_floor, and >= validation_score_ratio x the healthy
+            pre-loss score when known;
+          - position and heading close to the anchor carried forward by odometry;
+          - AMCL's own covariance (/amcl_pose after the updates) small enough.
+        """
         if self.validation_done:
             return
+        now = rospy.Time.now()
         if self.recovery_anchor is None:
             self.recovery_anchor = np.array(
                 [[laser_x], [laser_y], [laser_theta]]
             )
+            self.recovery_anchor_odom = self._lookup_odom_pose()
+
+        if self.validation_start_time is None:
+            waited = (now - self.validation_enter_time).to_sec()
+            if not self._rest_settled() and waited < self.validation_settle_timeout_sec:
+                return
+            self.validation_start_time = now
+            self.validation_scores = []
+            self.validation_poses = []
+            if waited >= self.validation_settle_timeout_sec and not self._rest_settled():
+                rospy.logwarn(
+                    '[LocalizationQuality] RECOVERY_VALIDATE: stationary AMCL updates not done '
+                    'after %.1fs; validating anyway', waited,
+                )
 
         w = self._score_pose(
             ranges, angles, laser_x, laser_y, laser_theta, num_valid_scans
@@ -581,48 +776,59 @@ class LocalizationQuality:
         scores = self.validation_scores[-n:]
         poses = self.validation_poses[-n:]
         mean_score = float(np.mean(scores))
+        ref = self.pre_loss_reference
         score_ok = mean_score >= self.validation_score_floor
-        if self.pre_loss_recent_mean is not None:
-            score_ok = score_ok or (
-                mean_score
-                >= self.validation_score_ratio * self.pre_loss_recent_mean
-            )
+        if ref is not None:
+            score_ok = score_ok and mean_score >= self.validation_score_ratio * ref
 
-        ax = float(self.recovery_anchor[0, 0])
-        ay = float(self.recovery_anchor[1, 0])
-        lx = float(poses[-1][0])
-        ly = float(poses[-1][1])
-        dist_ok = np.hypot(lx - ax, ly - ay) < self.max_acceptance_from_anchor
-
-        xs = [p[0] for p in poses]
-        ys = [p[1] for p in poses]
-        pos_std = float(np.hypot(np.std(xs), np.std(ys)))
-        thetas = [p[2] for p in poses]
-        yaw_std = float(np.std(thetas))
-
-        passed = (
-            score_ok
-            and dist_ok
-            and pos_std < self.validation_max_position_std
-            and yaw_std < self.validation_max_yaw_std
+        # Where the trusted anchor should be now, by odometry
+        predicted = self._propagate_pose(
+            self.recovery_anchor, self.recovery_anchor_odom, self._lookup_odom_pose()
         )
+        px, py, pth = float(predicted[0, 0]), float(predicted[1, 0]), float(predicted[2, 0])
+        lx, ly, lth = poses[-1]
+        dist = float(np.hypot(lx - px, ly - py))
+        dist_ok = dist < self.max_acceptance_from_anchor
+        yaw_err = float(abs(np.arctan2(np.sin(lth - pth), np.cos(lth - pth))))
+        yaw_check = (
+            self.validation_max_yaw_from_anchor > 0 and self.recovery_anchor_odom is not None
+        )
+        yaw_ok = (not yaw_check) or yaw_err < self.validation_max_yaw_from_anchor
+
+        # AMCL covariance from an /amcl_pose published since validation began (after the updates)
+        amcl = self.last_amcl_pose
+        pos_std = yaw_std = float('nan')
+        cov_ok = True
+        cov_note = 'none'
+        if amcl is not None and self.last_amcl_pose_rx >= self.validation_enter_time:
+            c = np.array(amcl.pose.covariance).reshape(6, 6)
+            pos_std = float(np.sqrt(max(np.linalg.eigvalsh(c[:2, :2]).max(), 0.0)))
+            yaw_std = float(np.sqrt(max(c[5, 5], 0.0)))
+            cov_ok = (
+                pos_std < self.validation_max_position_std
+                and yaw_std < self.validation_max_yaw_std
+            )
+            cov_note = 'fresh'
+        else:
+            cov_note = 'no fresh /amcl_pose, check skipped'
+
+        passed = score_ok and dist_ok and yaw_ok and cov_ok
         self.validation_done = True
         self.recovery_validated_pub.publish(Bool(data=passed))
-        if passed:
-            rospy.loginfo(
-                '[LocalizationQuality] RECOVERY_VALIDATE pass '
-                '(mean_score=%.4f dist=%.2fm pos_std=%.3f yaw_std=%.3f)',
-                mean_score, np.hypot(lx - ax, ly - ay), pos_std, yaw_std,
+        details = (
+            'mean_score=%.3f ref=%s score_ok=%s | dist=%.2fm dist_ok=%s | '
+            'yaw_err=%.3f yaw_ok=%s%s | amcl pos_std=%.3f yaw_std=%.3f cov_ok=%s (%s)'
+            % (
+                mean_score, 'none' if ref is None else '%.3f' % ref, score_ok,
+                dist, dist_ok, yaw_err, yaw_ok, '' if yaw_check else ' (unchecked)',
+                pos_std, yaw_std, cov_ok, cov_note,
             )
+        )
+        if passed:
+            rospy.loginfo('[LocalizationQuality] RECOVERY_VALIDATE pass (%s)', details)
             self._end_recovery_session()
         else:
-            rospy.logwarn(
-                '[LocalizationQuality] RECOVERY_VALIDATE fail '
-                '(mean_score=%.4f score_ok=%s dist_ok=%s dist=%.2fm '
-                'pos_std=%.3f yaw_std=%.3f)',
-                mean_score, score_ok, dist_ok, np.hypot(lx - ax, ly - ay),
-                pos_std, yaw_std,
-            )
+            rospy.logwarn('[LocalizationQuality] RECOVERY_VALIDATE fail (%s)', details)
 
     def find_best_recovery_pose(
         self, ranges, angles, laser_x, laser_y, laser_theta, current_w, num_valid_scans
@@ -750,16 +956,18 @@ class LocalizationQuality:
             self.post_recovery_jump_grace_sec
         )
 
-    def _append_track_history(self, pose, weight):
+    def _append_track_history(self, pose, weight, odom_pose):
         self.location_history.append(pose)
+        self.odom_history.append(odom_pose)
         self.weight_history.append(weight)
         if len(self.weight_history) > self.max_history_length:
             self.weight_history.pop(0)
         if len(self.location_history) > self.max_location_history_length:
             self.location_history.pop(0)
+            self.odom_history.pop(0)
 
     def _trigger_jump_recovery(
-        self, last_pose, bad_x, bad_y, bad_theta, delta_xy, delta_theta
+        self, last_pose, bad_x, bad_y, bad_theta, delta_xy, delta_theta, last_odom=None
     ):
         last_x = float(last_pose[0, 0])
         last_y = float(last_pose[1, 0])
@@ -779,7 +987,14 @@ class LocalizationQuality:
             last_theta,
         )
         self.recovery_fired_pub.publish(Bool(data=True))
-        self._begin_recovery_session(last_pose)
+        # Jump scans are never appended, so the latest scores are still from before the jump
+        reference = (
+            float(np.mean(self.weight_history[-10:]))
+            if len(self.weight_history) >= 10 else None
+        )
+        self._begin_recovery_session(
+            last_pose, anchor_odom=last_odom, pre_loss_reference=reference
+        )
         self.lost_localization_pub.publish(Bool(data=True))
 
     def _score_window_means(self):
@@ -831,12 +1046,21 @@ class LocalizationQuality:
         )
         self.recovery_fired_pub.publish(Bool(data=True))
 
-        anchor = (
-            self.location_history[-1]
-            if self.location_history
-            else np.array([[laser_x], [laser_y], [laser_theta]])
+        # Anchor on the last pose before the low-score window (the newest 10 scans scored badly);
+        # location_history and weight_history are aligned at their ends.
+        if len(self.location_history) >= 11:
+            anchor = self.location_history[-11]
+            anchor_odom = self.odom_history[-11]
+        elif self.location_history:
+            anchor = self.location_history[0]
+            anchor_odom = self.odom_history[0]
+        else:
+            anchor = np.array([[laser_x], [laser_y], [laser_theta]])
+            anchor_odom = self._lookup_odom_pose()
+        # Validate against the healthy score from before the drop, not the degraded recent mean
+        self._begin_recovery_session(
+            anchor, anchor_odom=anchor_odom, pre_loss_reference=old_mean
         )
-        self._begin_recovery_session(anchor, pre_loss_recent_mean=recent_mean)
         self.lost_localization_pub.publish(Bool(data=True))
 
     def scan_callback(self, msg):
@@ -848,17 +1072,27 @@ class LocalizationQuality:
         Args:
             msg: LaserScan message
         """
+        with self._lock:
+            self._scan_callback_locked(msg)
 
+    def _idle_heading_fix_pending(self):
+        return self.robot_state == ROBOT_MODE_IDLE and (
+            self.pending_park_heading_fix or not self.made_idle_adjustment
+        )
+
+    def _scan_callback_locked(self, msg):
         if not self.localized:
             return
 
-        # Brief settle after park spin; skip heavy work until ready
-        if (
-            self.robot_state == 0
-            and self.pending_park_heading_fix
-            and rospy.Time.now() < self.park_fix_ready_time
-        ):
-            return
+        # Idle / park heading correction is a fallback: let AMCL refine from still scans first
+        # (stationary updates), then check whether a heading correction is still worth it.
+        if self._idle_heading_fix_pending():
+            now = rospy.Time.now()
+            if self.pending_park_heading_fix and now < self.park_fix_ready_time:
+                return
+            waited = (now - self.idle_enter_time).to_sec()
+            if not self._rest_settled() and waited < self.heading_fix_max_wait_sec:
+                return
 
         ranges, angles, num_valid_scans, total_possible = self._preprocess_scan(msg)
         if num_valid_scans == 0:
@@ -875,14 +1109,13 @@ class LocalizationQuality:
         laser_y = translation[1]
         laser_theta = tf.transformations.euler_from_quaternion(rotation)[2]
         current_pose = np.array([[laser_x, laser_y, laser_theta]]).T
+        current_odom = self._lookup_odom_pose()
 
         w = self._score_pose(
             ranges, angles, laser_x, laser_y, laser_theta, num_valid_scans
         )
 
-        if self.robot_state == 0 and (
-            self.pending_park_heading_fix or not self.made_idle_adjustment
-        ):
+        if self._idle_heading_fix_pending():
             reason = 'park' if self.pending_park_heading_fix else 'idle'
             self.try_heading_correction(
                 ranges, angles, laser_x, laser_y, laser_theta, w, num_valid_scans, reason
@@ -932,6 +1165,7 @@ class LocalizationQuality:
                         laser_theta,
                         delta_xy,
                         delta_theta,
+                        last_odom=self.odom_history[-1],
                     )
                 else:
                     rospy.logwarn(
@@ -943,7 +1177,7 @@ class LocalizationQuality:
                     )
                 return
 
-        self._append_track_history(current_pose, w)
+        self._append_track_history(current_pose, w, current_odom)
         recent_mean, old_mean = self._score_window_means()
         self._publish_scan_match_diagnostics(w, recent_mean, old_mean)
 
@@ -978,8 +1212,14 @@ class LocalizationQuality:
         )
 
     def robot_state_callback(self, msg):
+        with self._lock:
+            self._robot_state_callback_locked(msg)
+
+    def _robot_state_callback_locked(self, msg):
         prev_state = self.robot_state
-        if prev_state == 6 and msg.data == 0:
+        if msg.data == ROBOT_MODE_IDLE and prev_state != ROBOT_MODE_IDLE:
+            self.idle_enter_time = rospy.Time.now()
+        if prev_state == ROBOT_MODE_PARK_HEADING and msg.data == ROBOT_MODE_IDLE:
             self.pending_park_heading_fix = True
             self.park_fix_ready_time = rospy.Time.now() + rospy.Duration(
                 self.park_settle_duration
@@ -1003,18 +1243,21 @@ class LocalizationQuality:
             and prev_state != ROBOT_MODE_RECOVERY_VALIDATE
         ):
             self.validation_enter_time = rospy.Time.now()
+            self.validation_start_time = None
             self.validation_scores = []
             self.validation_poses = []
             self.validation_done = False
             rospy.loginfo(
-                '[LocalizationQuality] RECOVERY_VALIDATE entered; '
-                'collecting %d scans',
+                '[LocalizationQuality] RECOVERY_VALIDATE entered; waiting for stationary AMCL '
+                'updates (max %.1fs), then collecting %d scans',
+                self.validation_settle_timeout_sec,
                 self.validation_scan_count,
             )
         if prev_state != ROBOT_MODE_TRACK and msg.data == ROBOT_MODE_TRACK:
             self.track_monitor_start_time = rospy.Time.now()
             self.weight_history = []
             self.location_history = []
+            self.odom_history = []
             if self.log_scan_match_diagnostics:
                 rospy.loginfo(
                     '[LocalizationQuality] TRACK started; score history cleared, '

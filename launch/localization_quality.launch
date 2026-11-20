@@ -40,14 +40,34 @@
         <param name="recovery_orientation_delta" value="0.35"/>
         <param name="recovery_orientation_count" value="3"/>
         <param name="recovery_search_verbose" value="true"/>
-        <param name="post_backing_settle_sec" value="0.3"/>
-        <!--  validate before replan -->
+        <!-- 0.5 s: with the navigator's command smoother the robot takes ~0.4 s to stop after backing -->
+        <param name="post_backing_settle_sec" value="0.5"/>
+        <!--  validate before replan (after the stationary AMCL updates) -->
         <param name="validation_scan_count" value="3"/>
         <param name="validation_score_floor" value="1.5"/>
-        <param name="validation_score_ratio" value="0.75"/>
+        <!-- Also need mean score >= ratio x the healthy pre-loss score. Above weight_drop_factor (0.6),
+             so a pose has to look clearly better than the one that was judged lost. -->
+        <param name="validation_score_ratio" value="0.7"/>
+        <!-- Distance / heading from the anchor carried forward by odometry -->
         <param name="max_acceptance_from_anchor" value="2.0"/>
-        <param name="validation_max_position_std" value="0.15"/>
-        <param name="validation_max_yaw_std" value="0.2"/>
+        <param name="validation_max_yaw_from_anchor" value="0.8"/>
+        <!-- AMCL's own covariance (/amcl_pose): sqrt of the largest xy eigenvalue (m), yaw std (rad) -->
+        <param name="validation_max_position_std" value="0.25"/>
+        <param name="validation_max_yaw_std" value="0.25"/>
+        <param name="validation_settle_timeout_sec" value="1.5"/>
+
+        <!-- Stationary AMCL updates: once /odom shows the robot at rest, call request_nomotion_update
+             rest_update_count times so AMCL refines from still scans (it does not update while stopped,
+             so after a spin its pose otherwise comes from scans taken while rotating) -->
+        <param name="rest_updates_enabled" value="true"/>
+        <param name="rest_settle_sec" value="0.25"/>
+        <param name="rest_update_count" value="3"/>
+        <param name="rest_update_spacing_sec" value="0.12"/>
+        <!-- Idle / park heading correction (fallback after the stationary updates): inject only if a
+             heading search beats the current score by this ratio (1.25 is roughly 0.08 rad of error) -->
+        <param name="heading_weight_ratio" value="1.25"/>
+        <param name="heading_min_delta" value="0.05"/>
+        <param name="heading_fix_max_wait_sec" value="2.0"/>
         <param name="max_recovery_attempts" value="2"/>
     </node>
 
